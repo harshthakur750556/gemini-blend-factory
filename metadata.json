@@ -1,0 +1,8 @@
+{
+  "name": "BlendFactory Studio",
+  "description": "Cloud-First Blender 3D Studio & Local Workspace combining headless GitHub Actions Blender 4.2 LTS builds, Gemini Function Calling with autonomous Cycles Vision refinement, Three.js GLB inspection, and native File System Access.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

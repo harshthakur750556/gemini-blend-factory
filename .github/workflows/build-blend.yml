@@ -1,0 +1,109 @@
+name: Build Blender 4.2 LTS Asset & Deploy Preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/build.py"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "blender-ci-pages"
+  cancel-in-progress: true
+
+jobs:
+  build-blend:
+    name: Headless Blender 4.2.16 LTS Build & Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Blender 4.2.16 LTS Linux x64
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ~/blender-cache
+          key: blender-4.2.16-linux-x64-v1
+
+      - name: Download and extract Blender 4.2.16 LTS (on cache miss)
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/blender-cache
+          curl -fSL "https://download.blender.org/release/Blender4.2/blender-4.2.16-linux-x64.tar.xz" -o /tmp/blender.tar.xz
+          tar -xJf /tmp/blender.tar.xz --strip-components=1 -C ~/blender-cache
+          rm -f /tmp/blender.tar.xz
+          ~/blender-cache/blender --version
+
+      - name: Install minimal headless runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxrender1 \
+            libxi6 \
+            libxkbcommon0 \
+            libsm6 \
+            libgl1 \
+            libegl1
+
+      - name: Run headless Blender build, export, and Cycles CPU preview
+        run: |
+          mkdir -p outputs
+          ~/blender-cache/blender \
+            --background \
+            --factory-startup \
+            --python-exit-code 1 \
+            --python scripts/build.py \
+            --python scripts/export_and_render.py
+
+      - name: Upload artifacts to overwritten 'latest' GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest \
+              --title "Latest Headless Blender Build" \
+              --notes "Rolling release overwritten on every build so binary outputs never bloat Git history." \
+              --latest
+          fi
+          gh release upload latest \
+            outputs/model.blend \
+            outputs/model.glb \
+            outputs/preview.png \
+            --clobber
+
+      - name: Assemble GitHub Pages _site artifact
+        run: |
+          mkdir -p _site
+          cp preview/index.html _site/index.html
+          cp outputs/model.glb _site/model.glb
+          cp outputs/preview.png _site/preview.png
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy-preview:
+    name: Deploy Live 3D Viewer to GitHub Pages
+    needs: build-blend
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

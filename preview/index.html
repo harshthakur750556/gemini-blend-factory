@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BlendFactory Live 3D Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --panel: #12151b;
+        --border: #232934;
+        --text: #e6e9ef;
+        --muted: #8b95a7;
+        --accent: #e87d24;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      #canvas-host {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .top-bar {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        right: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        pointer-events: none;
+        z-index: 20;
+      }
+      .brand-card {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: rgba(18, 21, 27, 0.92);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 14px;
+      }
+      .brand-title {
+        font-family: "Plus Jakarta Sans", sans-serif;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .brand-meta {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .downloads {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn {
+        appearance: none;
+        border: 1px solid var(--border);
+        background: rgba(18, 21, 27, 0.92);
+        color: var(--text);
+        font-family: "DM Sans", sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 8px 13px;
+        border-radius: 8px;
+        text-decoration: none;
+        cursor: pointer;
+        transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+        white-space: nowrap;
+      }
+      .btn:hover {
+        border-color: #3a4456;
+        background: #1a1f28;
+      }
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #0b0d10;
+        font-weight: 600;
+      }
+      .btn-primary:hover {
+        background: #f28c38;
+        border-color: #f28c38;
+      }
+      .btn[aria-pressed="true"] {
+        border-color: var(--accent);
+        color: #ffb169;
+        background: rgba(232, 125, 36, 0.14);
+      }
+      .preview-card {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        width: 184px;
+        background: rgba(18, 21, 27, 0.94);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        z-index: 20;
+      }
+      .preview-label {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 8px;
+        display: flex;
+        justify-content: space-between;
+        font-family: "JetBrains Mono", monospace;
+      }
+      .preview-card img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 6px;
+        display: block;
+        border: 1px solid var(--border);
+        background: #0b0d10;
+      }
+      .controls-dock {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(18, 21, 27, 0.94);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        z-index: 20;
+      }
+      #status-banner {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--muted);
+        background: rgba(18, 21, 27, 0.9);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 7px 10px;
+        z-index: 20;
+      }
+      @media (max-width: 720px) {
+        .preview-card {
+          display: none;
+        }
+        #status-banner {
+          display: none;
+        }
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="canvas-host"></div>
+
+    <header class="top-bar">
+      <div class="brand-card">
+        <span class="brand-title">BlendFactory Live Preview</span>
+        <span class="brand-meta">Blender 4.2 LTS &middot; GLB</span>
+      </div>
+      <div class="downloads">
+        <a class="btn" href="./model.glb" download="model.glb">Download model.glb</a>
+        <a id="blend-download" class="btn btn-primary" href="../releases/latest/download/model.blend">
+          Download model.blend
+        </a>
+      </div>
+    </header>
+
+    <aside class="preview-card" aria-label="Cycles CPU preview render">
+      <div class="preview-label">
+        <span>Cycles CPU</span>
+        <span>512px</span>
+      </div>
+      <img src="./preview.png" alt="Cycles CPU preview render of latest Blender build" />
+    </aside>
+
+    <div id="status-banner">Loading ./model.glb...</div>
+
+    <nav class="controls-dock" aria-label="3D viewport controls">
+      <button id="btn-rotate" class="btn" type="button" aria-pressed="true">Auto-Rotate</button>
+      <button id="btn-wireframe" class="btn" type="button" aria-pressed="false">Wireframe</button>
+      <button id="btn-reset" class="btn" type="button">Reset Camera</button>
+    </nav>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+      // Resolve GitHub Release download URL automatically when hosted on GitHub Pages
+      (function resolveReleaseLink() {
+        const blendLink = document.getElementById("blend-download");
+        const host = window.location.hostname;
+        const pathParts = window.location.pathname.split("/").filter(Boolean);
+        if (host.endsWith(".github.io") && pathParts.length >= 1) {
+          const owner = host.replace(".github.io", "");
+          const repo = pathParts[0];
+          blendLink.href = `https://github.com/${owner}/${repo}/releases/download/latest/model.blend`;
+        }
+      })();
+
+      const host = document.getElementById("canvas-host");
+      const statusEl = document.getElementById("status-banner");
+      const btnRotate = document.getElementById("btn-rotate");
+      const btnWireframe = document.getElementById("btn-wireframe");
+      const btnReset = document.getElementById("btn-reset");
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0b0d10);
+      scene.fog = new THREE.Fog(0x0b0d10, 12, 34);
+
+      const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.05, 120);
+      camera.position.set(2.2, 1.5, 2.4);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      host.appendChild(renderer.domElement);
+
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+
+      // Three-point studio lighting
+      const hemiLight = new THREE.HemisphereLight(0xdce8ff, 0x1e222a, 0.65);
+      scene.add(hemiLight);
+
+      const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.2);
+      keyLight.position.set(4.5, 6.2, 3.8);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(1024, 1024);
+      keyLight.shadow.bias = -0.0005;
+      scene.add(keyLight);
+
+      const rimLight = new THREE.DirectionalLight(0x88b4ff, 1.1);
+      rimLight.position.set(-4.0, 3.2, -3.5);
+      scene.add(rimLight);
+
+      // Subtle reference grid
+      const grid = new THREE.GridHelper(12, 24, 0x2d3544, 0x1a1f29);
+      grid.position.y = -0.002;
+      scene.add(grid);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.07;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 1.25;
+      controls.target.set(0, 0.6, 0);
+
+      let loadedModel = null;
+      let wireframeEnabled = false;
+      const defaultCamPos = new THREE.Vector3(2.2, 1.5, 2.4);
+      const defaultTarget = new THREE.Vector3(0, 0.6, 0);
+
+      function frameModel(object) {
+        const box = new THREE.Box3().setFromObject(object);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        object.position.x -= center.x;
+        object.position.z -= center.z;
+        object.position.y -= box.min.y;
+
+        const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+        const dist = maxDim * 2.05;
+        defaultTarget.set(0, size.y * 0.48, 0);
+        defaultCamPos.set(dist * 0.72, size.y * 0.65 + dist * 0.35, dist * 0.82);
+
+        camera.position.copy(defaultCamPos);
+        controls.target.copy(defaultTarget);
+        controls.update();
+      }
+
+      const loader = new GLTFLoader();
+      loader.load(
+        "./model.glb",
+        (gltf) => {
+          loadedModel = gltf.scene;
+          let meshCount = 0;
+          loadedModel.traverse((child) => {
+            if (child.isMesh) {
+              meshCount += 1;
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          scene.add(loadedModel);
+          frameModel(loadedModel);
+          statusEl.textContent = `Loaded ./model.glb (${meshCount} meshes)`;
+        },
+        undefined,
+        () => {
+          statusEl.textContent = "Awaiting first CI build artifact (./model.glb)";
+        }
+      );
+
+      btnRotate.addEventListener("click", () => {
+        controls.autoRotate = !controls.autoRotate;
+        btnRotate.setAttribute("aria-pressed", String(controls.autoRotate));
+      });
+
+      btnWireframe.addEventListener("click", () => {
+        wireframeEnabled = !wireframeEnabled;
+        btnWireframe.setAttribute("aria-pressed", String(wireframeEnabled));
+        if (loadedModel) {
+          loadedModel.traverse((child) => {
+            if (child.isMesh && child.material) {
+              const mats = Array.isArray(child.material) ? child.material : [child.material];
+              mats.forEach((m) => {
+                m.wireframe = wireframeEnabled;
+              });
+            }
+          });
+        }
+      });
+
+      btnReset.addEventListener("click", () => {
+        camera.position.copy(defaultCamPos);
+        controls.target.copy(defaultTarget);
+        controls.update();
+      });
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1616 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta content="web_dashboard" name="shell-type"/>
+<title>Apex 3D Studio - Professional Asset Inspector</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+tailwind.config = {
+  darkMode: "class",
+  theme: {
+    extend: {
+      colors: {
+        "primary": "#111318",
+        "primary-container": "#111318",
+        "on-primary": "#ffffff",
+        "on-primary-container": "#f0f2f5",
+        "surface": "#ffffff",
+        "surface-dim": "#f8f9fa",
+        "surface-bright": "#ffffff",
+        "surface-container-lowest": "#ffffff",
+        "surface-container-low": "#f8f9fa",
+        "surface-container": "#f0f2f5",
+        "surface-container-high": "#e5e8ec",
+        "surface-container-highest": "#dcdfe4",
+        "on-surface": "#111318",
+        "on-surface-variant": "#64748b",
+        "outline": "#94a3b8",
+        "outline-variant": "#dcdfe4",
+        "secondary": "#334155",
+        "secondary-container": "#1e293b",
+        "tertiary": "#0f172a",
+        "tertiary-container": "#334155",
+        "border-subtle": "#e2e8f0"
+      },
+      fontFamily: {
+        "headline-lg": ["Hanken Grotesk", "sans-serif"],
+        "headline-sm": ["Hanken Grotesk", "sans-serif"],
+        "body-md": ["Hanken Grotesk", "sans-serif"],
+        "body-sm": ["Hanken Grotesk", "sans-serif"],
+        "label-ui": ["Hanken Grotesk", "sans-serif"],
+        "label-numeric": ["JetBrains Mono", "monospace"],
+        "label-code": ["JetBrains Mono", "monospace"]
+      }
+    }
+  }
+};
+</script>
+<style>
+@layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
+    background-color: #f8f9fa;
+    color: #111318;
+  }
+}
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 19, 24, 0.6);
+}
+.glass-panel {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(220, 223, 228, 0.9);
+}
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(220, 223, 228, 0.8);
+}
+.custom-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  outline: none;
+}
+.custom-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #111318;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+.custom-range::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+  box-shadow: 0 0 6px rgba(0,0,0,0.35);
+}
+</style>
+</head>
+<body class="bg-surface-dim font-body-sm text-on-surface antialiased flex flex-col h-screen w-screen overflow-hidden">
+<!-- TOP SYSTEM HEADER & WORKSPACE TABS -->
+<header class="h-11 w-full bg-surface-container-lowest border-b border-[#dcdfe4] flex items-center justify-between px-2 shrink-0 z-50 select-none">
+<!-- Brand & Main Menu -->
+<div class="flex items-center gap-2">
+<div class="flex items-center gap-1.5 px-2 py-1 rounded bg-[#111318] text-white font-bold text-xs shadow-sm">
+<span class="material-symbols-outlined text-[16px]">deployed_code</span>
+<span class="tracking-wide font-headline-sm uppercase text-[10px]">APEX 3D</span>
+</div>
+<div class="h-4 w-px bg-[#dcdfe4] mx-1"></div>
+<div class="hidden sm:flex items-center text-xs text-on-surface-variant font-label-ui">
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">File</button>
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">Edit</button>
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">Asset</button>
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">Render</button>
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">View</button>
+<button class="px-2 py-1 rounded hover:bg-surface-container hover:text-black transition-colors">Help</button>
+</div>
+<!-- Workspace Tabs -->
+<div class="hidden md:flex items-center gap-0.5 ml-2 bg-[#f0f2f5] p-0.5 rounded-md border border-[#dcdfe4]">
+<button class="px-2.5 py-1 rounded text-[11px] font-medium bg-[#111318] text-white shadow-sm transition-all">Inspection</button>
+<button class="px-2.5 py-1 rounded text-[11px] font-medium text-on-surface-variant hover:text-black hover:bg-white transition-all">UV &amp; Topology</button>
+<button class="px-2.5 py-1 rounded text-[11px] font-medium text-on-surface-variant hover:text-black hover:bg-white transition-all">LookDev &amp; Lighting</button>
+<button class="px-2.5 py-1 rounded text-[11px] font-medium text-on-surface-variant hover:text-black hover:bg-white transition-all">Baking</button>
+<button class="px-1 text-on-surface-variant hover:text-black"><span class="material-symbols-outlined text-[14px]">add</span></button>
+</div>
+</div>
+<!-- Header Right Control Cluster -->
+<div class="flex items-center gap-2"><div class="hidden xl:flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#f0f2f5] border border-[#dcdfe4] text-xs font-label-code mr-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span class="text-on-surface-variant font-medium">GitHub:</span><span class="text-black font-semibold">main@b7a49e2</span><span class="text-[#dcdfe4]">/</span><span class="text-black truncate max-w-[120px]">Sub_Chassis</span><button class="ml-1 text-on-surface-variant hover:text-black transition-colors" title="Pull Latest Changes"><span class="material-symbols-outlined text-[13px]">sync</span></button></div><button class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-label-ui bg-black text-white hover:bg-[#334155] border border-black shadow-sm transition-all cursor-pointer" id="btn-open-asset-browser" title="Open 3D Model Asset Picker &amp; Repository"><span class="material-symbols-outlined text-[15px]">folder_data</span><span class="font-medium">Model Assets</span><span class="px-1 py-0.2 rounded bg-white/20 text-[10px] font-label-numeric font-bold">34</span></button>
+<!-- Scene Context Selector -->
+<div class="flex items-center bg-[#f0f2f5] hover:bg-white px-2 py-1 rounded-md border border-[#dcdfe4] gap-1.5 text-xs transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-[14px] text-black">deployed_code_history</span>
+<span class="text-black font-semibold text-[11px]">Apex_Mech_Rig_v4</span>
+<span class="material-symbols-outlined text-[12px] text-on-surface-variant">expand_more</span>
+</div>
+<!-- View Mode Quad/Single Toggle -->
+<button class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-label-ui bg-[#f0f2f5] border border-[#dcdfe4] hover:bg-white hover:border-black text-on-surface-variant hover:text-black transition-all" id="toggle-quadview" title="Toggle Quad-View Split (Alt+Ctrl+Q)">
+<span class="material-symbols-outlined text-[14px]">grid_view</span>
+<span class="hidden lg:inline text-[11px]" id="quadview-label">Single</span>
+</button>
+<!-- Turntable Auto-Spin Switch -->
+<button class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-label-ui bg-[#f0f2f5] border border-[#dcdfe4] hover:bg-white hover:border-black text-on-surface-variant hover:text-black transition-all" id="btn-autospin" title="Toggle Turntable 360° Auto-Spin">
+<span class="material-symbols-outlined text-[14px]" id="autospin-icon">autorenew</span>
+<span class="hidden sm:inline text-[11px]" id="autospin-text">Turntable</span>
+</button>
+<!-- Project Export / Share -->
+<button class="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-[#111318] text-white shadow-sm hover:bg-black transition-all">
+<span class="material-symbols-outlined text-[14px]">ios_share</span>
+<span class="hidden sm:inline">Export</span>
+</button>
+</div>
+</header>
+<!-- SECONDARY SUB-BAR / TRANSPORT & SHADING STRIP -->
+<div class="h-9 w-full bg-[#f8f9fa] border-b border-[#dcdfe4] px-2.5 flex items-center justify-between shrink-0 z-40 select-none">
+<!-- Left: Transformation Gizmo Modes -->
+<div class="flex items-center gap-1">
+<div class="flex items-center bg-[#ffffff] rounded p-0.5 border border-[#dcdfe4]">
+<button class="px-2 py-0.5 rounded text-[11px] font-semibold text-white bg-[#111318] flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]">center_focus_strong</span>
+<span>Inspect Mode</span>
+</button>
+<div class="h-3 w-px bg-[#dcdfe4] mx-1"></div>
+<button class="px-2 py-0.5 rounded text-[11px] text-black hover:bg-surface-container flex items-center gap-1 active-mode bg-surface-container" id="gizmo-mode-orbit">
+<span class="material-symbols-outlined text-[13px] text-black">3d_rotation</span> Orbit
+      </button>
+<button class="px-2 py-0.5 rounded text-[11px] text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center gap-1" id="gizmo-mode-pan">
+<span class="material-symbols-outlined text-[13px]">pan_tool</span> Pan
+      </button>
+<button class="px-2 py-0.5 rounded text-[11px] text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center gap-1" id="gizmo-mode-zoom">
+<span class="material-symbols-outlined text-[13px]">zoom_in</span> Zoom
+      </button>
+</div>
+<!-- Transform Orientation -->
+<div class="hidden xl:flex items-center gap-1 ml-2 text-xs text-on-surface-variant">
+<span class="material-symbols-outlined text-[13px]">public</span>
+<span class="text-[11px]">Global</span>
+<span class="text-[#dcdfe4]">|</span>
+<span class="material-symbols-outlined text-[13px]">blur_circular</span>
+<span class="text-[11px]">Center Pivot</span>
+</div>
+</div>
+<!-- Center: Shading & Render Pass Selector Cluster -->
+<div class="flex items-center gap-1 bg-white p-0.5 rounded-md border border-[#dcdfe4] overflow-x-auto">
+<span class="text-[10px] font-label-code text-on-surface-variant px-1 uppercase tracking-wider hidden sm:inline">Pass:</span>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-semibold bg-[#111318] text-white transition-all shadow-sm" data-pass="combined" title="Combined Studio Shading">Combined</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all" data-pass="wireframe" title="Wireframe Mesh Cage">Wireframe</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all" data-pass="albedo" title="Diffuse / Albedo Flat Color">Albedo</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all" data-pass="normal" title="Tangent Space Normal Map (Monochrome Normals)">Normal</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all" data-pass="roughness" title="Roughness / Gloss Map">Roughness</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all" data-pass="matcap" title="Pure Clay / Sculptor MatCap">MatCap</button>
+<button class="pass-btn px-2 py-0.5 rounded text-[10px] font-label-ui font-medium text-on-surface-variant hover:text-black hover:bg-[#f0f2f5] transition-all hidden md:inline" data-pass="xray" title="Topology X-Ray">X-Ray</button>
+</div>
+<!-- Right: Overlays, Lighting Angle & Live Performance -->
+<div class="flex items-center gap-2">
+<!-- Realtime Live FPS Badge -->
+<div class="hidden sm:flex items-center gap-1 bg-white px-2 py-0.5 rounded border border-[#dcdfe4] font-label-code text-[10px]">
+<span class="w-1.5 h-1.5 rounded-full bg-black animate-pulse"></span>
+<span class="text-black font-bold" id="live-fps">60.0</span>
+<span class="text-on-surface-variant">FPS</span>
+</div>
+<!-- Toggle Overlays Button -->
+<button class="flex items-center gap-1 px-2 py-0.5 rounded bg-white text-black text-[11px] font-label-ui border border-[#dcdfe4] hover:border-black" id="btn-toggle-overlays">
+<span class="material-symbols-outlined text-[13px] text-black">grid_4x4</span>
+<span class="hidden md:inline">Overlays</span>
+</button>
+<!-- Toggle Panels Collapse Shortcut -->
+<button class="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:text-black hover:bg-[#e5e8ec]" id="toggle-right-panel" title="Toggle Right Inspector Panel">
+<span class="material-symbols-outlined text-[16px]" id="right-panel-icon">dock_to_left</span>
+</button>
+</div>
+</div>
+<!-- MAIN VIEWPORT + DOCKABLE RESIZABLE WORKSPACE -->
+<div class="flex-1 w-full flex overflow-hidden relative">
+<!-- LEFT MINI TOOLBAR -->
+<aside class="w-10 bg-surface-container-lowest border-r border-[#dcdfe4] flex flex-col items-center py-2 gap-1.5 shrink-0 z-30"><button class="w-7 h-7 rounded-md bg-[#f0f2f5] hover:bg-[#111318] text-black hover:text-white border border-[#dcdfe4] hover:border-black flex items-center justify-center transition-all shadow-sm" id="mini-open-assets" title="3D Model Asset Picker &amp; Repo Browser"><span class="material-symbols-outlined text-[16px]">folder_special</span></button><div class="w-5 h-px bg-[#dcdfe4] my-0.5"></div>
+<button class="w-7 h-7 rounded-md bg-[#111318] text-white flex items-center justify-center shadow-sm" title="Orbit Inspection (1)">
+<span class="material-symbols-outlined text-[16px]">orbit</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Select Component (V)">
+<span class="material-symbols-outlined text-[16px]">touch_app</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Measurement Tape (M)">
+<span class="material-symbols-outlined text-[16px]">straighten</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Exploded View (E)">
+<span class="material-symbols-outlined text-[16px]">splitscreen</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Light Rig Position (L)">
+<span class="material-symbols-outlined text-[16px]">lightbulb</span>
+</button>
+<div class="w-5 h-px bg-[#dcdfe4] my-1"></div>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Slice Plane / Cross Section (C)">
+<span class="material-symbols-outlined text-[16px]">cut</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Snapshot High-Res Render (F12)">
+<span class="material-symbols-outlined text-[16px]">camera</span>
+</button>
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center transition-colors" title="Reset Camera View (Home)">
+<span class="material-symbols-outlined text-[16px]">center_focus_weak</span>
+</button>
+<div class="mt-auto flex flex-col gap-1.5 items-center">
+<button class="w-7 h-7 rounded-md text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center justify-center" title="Studio Preferences">
+<span class="material-symbols-outlined text-[16px]">settings</span>
+</button>
+</div>
+</aside>
+<!-- CENTRAL VIEWPORT AREA -->
+<div class="flex-1 relative flex flex-col overflow-hidden bg-[#eef1f5]" id="viewport-wrapper">
+<!-- SINGLE VIEWPORT CANVAS CONTAINER (DEFAULT) -->
+<div class="relative w-full h-full flex items-center justify-center overflow-hidden" id="single-viewport">
+<!-- High Performance Interactive Canvas -->
+<canvas class="absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing block" id="viewport-canvas"></canvas>
+<!-- TOP-LEFT CAMERA METADATA & TELEMETRY HUD -->
+<div class="absolute top-3 left-3.5 z-20 flex flex-col gap-1 pointer-events-none">
+<div class="flex items-center gap-2 glass-panel px-2.5 py-1 rounded-md text-xs shadow-sm">
+<span class="w-2 h-2 rounded-full bg-[#111318]"></span>
+<span class="font-headline-sm font-semibold text-[#111318] tracking-wide" id="view-perspective-name">PERSPECTIVE CAMERA</span>
+<span class="text-[#dcdfe4]">|</span>
+<span class="text-on-surface-variant font-label-code text-[11px]" id="hud-fov">FOV: 45°</span>
+<span class="text-[#dcdfe4]">|</span>
+<span class="text-black font-semibold font-label-code text-[11px]" id="hud-orbit-readout">Pitch: 18° · Yaw: 32°</span>
+</div>
+<div class="text-[10px] font-label-code text-on-surface-variant pl-1">
+          Mesh: <span class="text-black font-semibold">Apex_Titan_Mk4</span> [Active: <span class="text-black" id="active-mesh-name">Full Composite</span>]
+        </div>
+</div>
+<!-- TOP-RIGHT INTERACTIVE 3D ORIENTATION GIZMO CUBE -->
+<div class="absolute top-3 right-3 z-30 flex flex-col items-end gap-2 pointer-events-auto">
+<!-- Interactive Axis Compass Widget -->
+<div class="glass-panel p-1 rounded-xl shadow-sm border border-[#dcdfe4] flex flex-col items-center">
+<canvas class="cursor-pointer" height="76" id="gizmo-compass-canvas" title="Click X, Y, or Z axis to snap to Orthographic view" width="76"></canvas>
+<div class="text-[9px] font-label-code text-on-surface-variant pb-0.5">AXIS GIZMO</div>
+</div>
+<!-- Quick Viewport Navigation Strip -->
+<div class="flex flex-col glass-panel rounded-lg p-0.5 shadow-sm border border-[#dcdfe4]">
+<button class="w-7 h-7 rounded hover:bg-surface-container text-on-surface-variant hover:text-black flex items-center justify-center transition-colors" id="btn-zoom-in" title="Zoom In (+)">
+<span class="material-symbols-outlined text-[15px]">add</span>
+</button>
+<button class="w-7 h-7 rounded hover:bg-surface-container text-on-surface-variant hover:text-black flex items-center justify-center transition-colors" id="btn-zoom-out" title="Zoom Out (-)">
+<span class="material-symbols-outlined text-[15px]">remove</span>
+</button>
+<button class="w-7 h-7 rounded hover:bg-surface-container text-on-surface-variant hover:text-black flex items-center justify-center transition-colors" id="btn-reset-cam" title="Reset View (Home)">
+<span class="material-symbols-outlined text-[15px]">restart_alt</span>
+</button>
+<button class="w-7 h-7 rounded hover:bg-surface-container text-on-surface-variant hover:text-black flex items-center justify-center transition-colors" id="btn-toggle-cam-ortho" title="Toggle Perspective / Orthographic (Numpad 5)">
+<span class="material-symbols-outlined text-[15px]">view_in_ar</span>
+</button>
+</div>
+</div>
+<!-- FLOATING VIEWPORT SETTINGS & LIGHTING CONTROLS HUD (BOTTOM-CENTER) -->
+<div class="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 glass-panel px-3.5 py-1.5 rounded-full flex items-center gap-3 shadow-md border border-[#dcdfe4] text-xs font-label-ui">
+<!-- Light Angle Dial -->
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-black">wb_sunny</span>
+<span class="text-[10px] text-on-surface-variant uppercase font-medium">Light:</span>
+<input class="w-16 custom-range" id="light-angle-slider" max="360" min="0" title="Adjust Key Light Direction" type="range" value="45"/>
+<span class="text-[10px] font-label-code text-black font-semibold w-6 text-right" id="light-angle-val">45°</span>
+</div>
+<div class="h-3 w-px bg-[#dcdfe4]"></div>
+<!-- Wireframe Opacity Scrubber -->
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-black">grid_3x3</span>
+<span class="text-[10px] text-on-surface-variant uppercase font-medium">Wire:</span>
+<input class="w-14 custom-range" id="wire-opacity-slider" max="100" min="0" title="Wireframe Overlay Density" type="range" value="65"/>
+<span class="text-[10px] font-label-code text-black font-semibold w-6 text-right" id="wire-opacity-val">65%</span>
+</div>
+<div class="h-3 w-px bg-[#dcdfe4]"></div>
+<!-- Environment HDRI Preset -->
+<div class="flex items-center gap-1 cursor-pointer hover:text-black text-on-surface-variant">
+<span class="material-symbols-outlined text-[14px] text-black">hdr_on</span>
+<span class="text-[11px] font-medium text-black">Studio 4K</span>
+<span class="material-symbols-outlined text-[12px]">unfold_more</span>
+</div>
+</div>
+<!-- BOTTOM-LEFT SCENE GEOMETRY STATS HUD -->
+<div class="absolute bottom-3 left-3 z-20 glass-panel p-2.5 rounded-lg font-label-code text-[10px] text-on-surface-variant shadow-md border border-[#dcdfe4] flex flex-col gap-0.5" id="stats-hud">
+<div class="flex items-center justify-between pb-1 border-b border-[#dcdfe4] font-semibold text-black tracking-wide">
+<span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-black"></span>TOPOLOGY HUD</span>
+<span class="text-black bg-[#f0f2f5] px-1 py-0.5 rounded text-[9px] border border-[#dcdfe4]">MANIFOLD</span>
+</div>
+<div class="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-0.5">
+<span>Vertices:</span>
+<span class="text-right text-black font-semibold">54,210</span>
+<span>Edges:</span>
+<span class="text-right text-black font-semibold">108,420</span>
+<span>Triangles:</span>
+<span class="text-right text-black font-bold">107,980</span>
+<span>Draw Calls:</span>
+<span class="text-right text-black">1</span>
+<span>GPU VRAM:</span>
+<span class="text-right text-black">328 MB</span>
+</div>
+</div>
+</div>
+<!-- 2x2 QUAD-VIEW SPLIT CONTAINER (HIDDEN BY DEFAULT, TOGGLED VIA SCRIPT) -->
+<div class="hidden absolute inset-0 w-full h-full grid grid-cols-2 grid-rows-2 gap-1 bg-[#dcdfe4] p-1" id="quad-viewport-grid">
+<!-- Quad 1: Top (XZ) -->
+<div class="relative bg-white border border-[#dcdfe4] rounded flex items-center justify-center overflow-hidden">
+<div class="absolute top-1.5 left-2 z-10 text-[10px] font-label-code text-black bg-white/90 border border-[#dcdfe4] px-1.5 py-0.5 rounded shadow-sm">Top (Ortho)</div>
+<canvas class="w-full h-full block" id="quad-canvas-top"></canvas>
+</div>
+<!-- Quad 2: Front (XY) -->
+<div class="relative bg-white border border-[#dcdfe4] rounded flex items-center justify-center overflow-hidden">
+<div class="absolute top-1.5 left-2 z-10 text-[10px] font-label-code text-black bg-white/90 border border-[#dcdfe4] px-1.5 py-0.5 rounded shadow-sm">Front (Ortho)</div>
+<canvas class="w-full h-full block" id="quad-canvas-front"></canvas>
+</div>
+<!-- Quad 3: Right (ZY) -->
+<div class="relative bg-white border border-[#dcdfe4] rounded flex items-center justify-center overflow-hidden">
+<div class="absolute top-1.5 left-2 z-10 text-[10px] font-label-code text-black bg-white/90 border border-[#dcdfe4] px-1.5 py-0.5 rounded shadow-sm">Right (Ortho)</div>
+<canvas class="w-full h-full block" id="quad-canvas-right"></canvas>
+</div>
+<!-- Quad 4: Camera Perspective -->
+<div class="relative bg-white border border-black rounded flex items-center justify-center overflow-hidden">
+<div class="absolute top-1.5 left-2 z-10 text-[10px] font-label-code text-black bg-white/90 border border-black px-1.5 py-0.5 rounded shadow-sm">Perspective (Main)</div>
+<canvas class="w-full h-full block" id="quad-canvas-persp"></canvas>
+</div>
+</div>
+<div class="hidden absolute inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-black/40 backdrop-blur-sm" id="asset-browser-modal"><div class="bg-white rounded-xl shadow-2xl border border-[#cbd5e1] w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden select-none animate-in fade-in zoom-in-95 duration-200"><div class="h-12 bg-[#f8f9fa] border-b border-[#dcdfe4] px-4 flex items-center justify-between shrink-0"><div class="flex items-center gap-3"><div class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#111318] text-white font-bold text-xs shadow-sm"><span class="material-symbols-outlined text-[16px]">folder_special</span><span class="font-headline-sm uppercase text-[10px] tracking-wide">Asset Repository</span></div><div class="h-4 w-px bg-[#dcdfe4]"></div><div class="flex items-center bg-[#eef1f5] p-0.5 rounded-lg border border-[#dcdfe4] text-xs font-label-ui"><button class="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white text-black shadow-sm transition-all flex items-center gap-1.5" id="tab-source-gh"><span class="material-symbols-outlined text-[14px] text-black">source_environment</span><span>GitHub Repo</span><span class="text-[9px] bg-black text-white px-1 rounded font-label-code">Synced</span></button><button class="px-2.5 py-1 rounded-md text-[11px] font-medium text-on-surface-variant hover:text-black transition-all flex items-center gap-1.5" id="tab-source-local"><span class="material-symbols-outlined text-[14px]">folder_open</span><span>Local Storage</span></button></div></div><div class="flex items-center gap-2"><div class="hidden sm:flex items-center gap-2 text-xs font-label-code bg-white px-2.5 py-1 rounded-md border border-[#dcdfe4]"><span class="text-on-surface-variant">org/3d-mech-assets:</span><span class="font-semibold text-black">main</span><span class="text-[#dcdfe4]">·</span><span class="text-[10px] bg-[#f0f2f5] px-1 rounded border border-[#dcdfe4]">b7a49e2</span><span class="text-emerald-700 text-[10px] font-medium">Synced 2m ago</span><button class="ml-1 text-black hover:text-slate-600 transition-colors" title="Pull/Fetch Latest"><span class="material-symbols-outlined text-[14px]">download</span></button></div><button class="w-7 h-7 rounded-md hover:bg-[#e2e8f0] text-on-surface-variant hover:text-black flex items-center justify-center transition-colors" id="btn-close-asset-browser" title="Close Browser (Esc)"><span class="material-symbols-outlined text-[18px]">close</span></button></div></div><div class="p-3 bg-white border-b border-[#dcdfe4] flex flex-wrap items-center justify-between gap-2.5"><div class="flex-1 min-w-[260px] flex items-center bg-[#f8f9fa] px-3 py-1.5 rounded-lg border border-[#dcdfe4] text-xs"><span class="material-symbols-outlined text-[16px] text-on-surface-variant mr-2">search</span><input class="w-full bg-transparent text-black text-xs focus:outline-none placeholder:text-outline font-label-ui" id="asset-search-input" placeholder="Filter models, tags, formats .gltf, .blend, .obj, .fbx..." type="text"/></div><div class="flex items-center gap-2 text-xs font-label-ui"><div class="flex items-center gap-1.5 bg-[#f8f9fa] px-2.5 py-1 rounded-lg border border-[#dcdfe4]"><span class="text-on-surface-variant text-[11px]">Sort:</span><select class="bg-transparent text-black font-semibold text-[11px] focus:outline-none cursor-pointer"><option>Recently Added / Modified</option><option>Name (A - Z)</option><option>Triangle Count (High-Low)</option><option>File Size (Small-Large)</option></select></div><button class="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#f8f9fa] hover:bg-black hover:text-white border border-[#dcdfe4] text-[11px] font-medium transition-all"><span class="material-symbols-outlined text-[14px]">file_upload</span><span>Import File</span></button></div></div><div class="flex-1 flex overflow-hidden"><div class="w-56 bg-[#f8f9fa] border-r border-[#dcdfe4] p-3 flex flex-col gap-3 shrink-0 overflow-y-auto"><div class="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant font-label-code">Repositories &amp; Groups</div><div class="space-y-1 font-label-ui text-xs"><button class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md bg-[#111318] text-white font-semibold shadow-sm"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-[15px]">apps</span>All Models</span><span class="text-[10px] font-label-numeric font-medium px-1.5 py-0.2 rounded bg-white/20">34</span></button><button class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-white text-black font-medium transition-colors"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-[15px] text-on-surface-variant">folder</span>Mech_Frames</span><span class="text-[10px] font-label-numeric text-on-surface-variant">12</span></button><button class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-white text-black font-medium transition-colors"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-[15px] text-on-surface-variant">folder</span>Weapons_Rig</span><span class="text-[10px] font-label-numeric text-on-surface-variant">8</span></button><button class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-white text-black font-medium transition-colors"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-[15px] text-on-surface-variant">folder</span>Vehicles</span><span class="text-[10px] font-label-numeric text-on-surface-variant">9</span></button><button class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-white text-black font-medium transition-colors"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-[15px] text-on-surface-variant">folder</span>Environment_Props</span><span class="text-[10px] font-label-numeric text-on-surface-variant">5</span></button></div><div class="mt-auto pt-3 border-t border-[#dcdfe4] space-y-2"><div class="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant font-label-code">Storage Path</div><div class="p-2 rounded bg-white border border-[#dcdfe4] text-[10px] font-label-code text-on-surface-variant break-all"><span class="text-black font-medium block">/workspace/models/</span>git@github.com:apex-org/assets</div></div></div><div class="flex-1 bg-[#f1f5f9] p-4 overflow-y-auto"><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5" id="asset-card-grid"><div class="bg-white rounded-lg border-2 border-black p-3 flex flex-col justify-between shadow-sm relative group"><div class="absolute top-2.5 right-2.5 z-10 flex items-center gap-1"><span class="px-1.5 py-0.5 rounded bg-black text-white text-[9px] font-bold font-label-code tracking-wide shadow-sm">ACTIVE IN VIEWPORT</span></div><div class="h-32 bg-[#0f172a] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/40 flex items-center justify-center"><span class="material-symbols-outlined text-white text-3xl">smart_toy</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.blend</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Apex_Titan_Mk4</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">14.2 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>108k Tris</span><span>·</span><span>54k Verts</span><span>·</span><span>2K Textures</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px] text-emerald-600">verified</span>Updated 14m ago by CI</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-black text-white text-[11px] font-semibold flex items-center justify-center gap-1"><span class="material-symbols-outlined text-[13px]">visibility</span>Loaded</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Model Details"><span class="material-symbols-outlined text-[13px]">info</span></button></div></div><div class="bg-white rounded-lg border border-[#cbd5e1] hover:border-black p-3 flex flex-col justify-between shadow-sm transition-all hover:shadow-md"><div class="h-32 bg-[#1e293b] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/30 flex items-center justify-center"><span class="material-symbols-outlined text-slate-300 text-3xl">sports_handball</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.gltf</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Gatling_Armament_Pod_v2</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">5.8 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>32k Tris</span><span>·</span><span>18k Verts</span><span>·</span><span>PBR ORM</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">schedule</span>Commit: 4a2f90 (1d ago)</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-[#f0f2f5] hover:bg-black hover:text-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"><span class="material-symbols-outlined text-[13px]">download</span>Load Model</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Inspect Asset"><span class="material-symbols-outlined text-[13px]">tune</span></button></div></div><div class="bg-white rounded-lg border border-[#cbd5e1] hover:border-black p-3 flex flex-col justify-between shadow-sm transition-all hover:shadow-md"><div class="h-32 bg-[#1e293b] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/30 flex items-center justify-center"><span class="material-symbols-outlined text-slate-300 text-3xl">flight</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.fbx</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Recon_Hover_Drone_X1</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">8.4 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>48k Tris</span><span>·</span><span>24k Verts</span><span>·</span><span>Rigged</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">schedule</span>Local modified: 3h ago</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-[#f0f2f5] hover:bg-black hover:text-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"><span class="material-symbols-outlined text-[13px]">download</span>Load Model</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Inspect Asset"><span class="material-symbols-outlined text-[13px]">tune</span></button></div></div><div class="bg-white rounded-lg border border-[#cbd5e1] hover:border-black p-3 flex flex-col justify-between shadow-sm transition-all hover:shadow-md"><div class="h-32 bg-[#1e293b] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/30 flex items-center justify-center"><span class="material-symbols-outlined text-slate-300 text-3xl">precision_manufacturing</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.obj</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Hydraulic_Stilt_Leg_Set</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">3.1 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>19k Tris</span><span>·</span><span>11k Verts</span><span>·</span><span>Clean Topology</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">schedule</span>Commit: 91b0cc (3d ago)</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-[#f0f2f5] hover:bg-black hover:text-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"><span class="material-symbols-outlined text-[13px]">download</span>Load Model</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Inspect Asset"><span class="material-symbols-outlined text-[13px]">tune</span></button></div></div><div class="bg-white rounded-lg border border-[#cbd5e1] hover:border-black p-3 flex flex-col justify-between shadow-sm transition-all hover:shadow-md"><div class="h-32 bg-[#1e293b] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/30 flex items-center justify-center"><span class="material-symbols-outlined text-slate-300 text-3xl">directions_car</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.blend</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Combat_Buggy_Chassis</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">18.9 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>142k Tris</span><span>·</span><span>78k Verts</span><span>·</span><span>4K UVs</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">schedule</span>Commit: cc721a (5d ago)</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-[#f0f2f5] hover:bg-black hover:text-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"><span class="material-symbols-outlined text-[13px]">download</span>Load Model</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Inspect Asset"><span class="material-symbols-outlined text-[13px]">tune</span></button></div></div><div class="bg-white rounded-lg border border-[#cbd5e1] hover:border-black p-3 flex flex-col justify-between shadow-sm transition-all hover:shadow-md"><div class="h-32 bg-[#1e293b] rounded-md border border-[#334155] relative flex items-center justify-center overflow-hidden mb-2.5"><div class="absolute inset-0 opacity-20 bg-[radial-gradient(#94a3b8_1px,transparent_1px)] [background-size:12px_12px]"></div><div class="w-16 h-16 rounded-full border border-dashed border-white/30 flex items-center justify-center"><span class="material-symbols-outlined text-slate-300 text-3xl">architecture</span></div><div class="absolute bottom-1.5 left-2 text-[9px] font-label-code text-white/80 bg-black/60 px-1.5 py-0.5 rounded">.gltf</div></div><div><div class="flex items-center justify-between"><h4 class="text-xs font-bold text-black">Bunker_Blast_Door_Assembly</h4><span class="text-[10px] font-label-numeric text-on-surface-variant">4.2 MB</span></div><div class="flex items-center gap-2 mt-1 text-[10px] font-label-code text-on-surface-variant"><span>16k Tris</span><span>·</span><span>9k Verts</span><span>·</span><span>Modular</span></div><div class="text-[10px] text-on-surface-variant mt-1.5 flex items-center gap-1"><span class="material-symbols-outlined text-[12px]">schedule</span>Commit: ee8190 (1w ago)</div></div><div class="mt-3 pt-2.5 border-t border-[#dcdfe4] flex items-center gap-2"><button class="flex-1 py-1 rounded bg-[#f0f2f5] hover:bg-black hover:text-white text-black text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"><span class="material-symbols-outlined text-[13px]">download</span>Load Model</button><button class="px-2 py-1 rounded border border-[#dcdfe4] hover:bg-[#f0f2f5] text-black text-[11px]" title="Inspect Asset"><span class="material-symbols-outlined text-[13px]">tune</span></button></div></div></div></div></div><div class="h-9 bg-[#f8f9fa] border-t border-[#dcdfe4] px-4 flex items-center justify-between shrink-0 text-xs font-label-code text-on-surface-variant"><div class="flex items-center gap-2"><span>Showing 6 of 34 Models</span><span class="text-[#dcdfe4]">|</span><span class="text-emerald-700 font-semibold">● Remote Git Repository Connected</span></div><div class="flex items-center gap-2"><button class="px-3 py-1 rounded bg-[#111318] text-white text-[11px] font-label-ui font-semibold hover:bg-black transition-colors" id="btn-confirm-browser">Select &amp; Close</button></div></div></div></div></div>
+<!-- RIGHT DOCKABLE INSPECTOR & OUTLINER COLUMN -->
+<aside class="w-80 md:w-84 xl:w-96 bg-[#f8f9fa] border-l border-[#dcdfe4] flex flex-col shrink-0 transition-all duration-300 z-30 select-none overflow-hidden" id="right-inspector">
+<!-- Inspector Panel Header Tabs -->
+<div class="h-9 bg-white border-b border-[#dcdfe4] flex items-center px-1 gap-0.5 overflow-x-auto shrink-0">
+<button class="inspector-tab active px-2.5 py-1 rounded text-[11px] font-semibold text-white bg-[#111318] flex items-center gap-1 shadow-sm" data-tab="tab-outliner">
+<span class="material-symbols-outlined text-[13px]">account_tree</span>
+<span>Outliner</span>
+</button>
+<button class="inspector-tab px-2.5 py-1 rounded text-[11px] font-medium text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center gap-1" data-tab="tab-material">
+<span class="material-symbols-outlined text-[13px]">palette</span>
+<span>Shader &amp; BSDF</span>
+</button>
+<button class="inspector-tab px-2.5 py-1 rounded text-[11px] font-medium text-on-surface-variant hover:text-black hover:bg-surface-container flex items-center gap-1" data-tab="tab-diagnostics">
+<span class="material-symbols-outlined text-[13px]">troubleshoot</span>
+<span>Diagnostics</span>
+</button>
+</div>
+<!-- TAB CONTENT 1: OUTLINER SCENE HIERARCHY -->
+<div class="tab-pane flex-1 flex flex-col overflow-hidden" id="tab-outliner">
+<!-- Search & Quick Filters -->
+<div class="p-2 border-b border-[#dcdfe4] flex items-center gap-1.5 bg-[#f8f9fa]">
+<div class="flex-1 flex items-center bg-white px-2 py-1 rounded-md border border-[#dcdfe4] text-xs">
+<span class="material-symbols-outlined text-[13px] text-on-surface-variant mr-1.5">search</span>
+<input class="w-full bg-transparent text-black text-[11px] focus:outline-none placeholder:text-outline font-label-ui" placeholder="Filter hierarchy..." type="text"/>
+</div>
+<button class="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:text-black hover:bg-white border border-transparent hover:border-[#dcdfe4]" title="Filter by Types">
+<span class="material-symbols-outlined text-[14px]">tune</span>
+</button>
+<button class="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:text-black hover:bg-white border border-transparent hover:border-[#dcdfe4]" title="New Collection">
+<span class="material-symbols-outlined text-[14px]">create_new_folder</span>
+</button>
+</div>
+<!-- Hierarchy Tree List -->
+<div class="flex-1 overflow-y-auto p-1.5 space-y-0.5 text-xs font-label-ui" id="outliner-tree">
+<!-- Root: Scene -->
+<div class="flex items-center justify-between px-2 py-1 rounded text-black hover:bg-white cursor-pointer border border-transparent hover:border-[#dcdfe4]">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-on-surface-variant">arrow_drop_down</span>
+<span class="material-symbols-outlined text-[14px] text-black">cloud_circle</span>
+<span class="font-semibold text-[11px]">Apex_Master_Scene</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface-variant">
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">visibility</span>
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">lock_open</span>
+</div>
+</div>
+<!-- Collection 1: Character Mech Rig -->
+<div class="ml-3 pl-2 border-l border-[#dcdfe4] space-y-0.5">
+<div class="flex items-center justify-between px-2 py-1 rounded text-black hover:bg-white cursor-pointer border border-transparent hover:border-[#dcdfe4]">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-on-surface-variant">arrow_drop_down</span>
+<span class="material-symbols-outlined text-[14px] text-black">folder</span>
+<span class="font-bold text-[11px] text-black">Mech_Apex_Titan</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface-variant">
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">visibility</span>
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">lock_open</span>
+</div>
+</div>
+<!-- Mesh Components with Interactive Toggles -->
+<div class="ml-3 pl-2 border-l border-[#dcdfe4] space-y-0.5" id="outliner-components">
+<!-- Chassis Core -->
+<div class="tree-node active flex items-center justify-between px-2 py-1 rounded bg-white border border-[#111318] text-black shadow-sm cursor-pointer" data-part="chassis">
+<div class="flex items-center gap-1.5 truncate">
+<span class="material-symbols-outlined text-[14px] text-black">view_in_ar</span>
+<span class="truncate text-[11px] font-semibold">Sub_Chassis_Hull</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="node-vis-btn hover:text-black" title="Toggle Layer Visibility"><span class="material-symbols-outlined text-[13px] text-black">visibility</span></button>
+<button class="node-lock-btn hover:text-black" title="Toggle Lock"><span class="material-symbols-outlined text-[13px]">lock_open</span></button>
+</div>
+</div>
+<!-- Cockpit Canopy Glass -->
+<div class="tree-node flex items-center justify-between px-2 py-1 rounded hover:bg-white text-black cursor-pointer border border-transparent hover:border-[#dcdfe4]" data-part="cockpit">
+<div class="flex items-center gap-1.5 truncate">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">view_in_ar</span>
+<span class="truncate text-[11px]">Cockpit_Canopy_Armor</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="node-vis-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">visibility</span></button>
+<button class="node-lock-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">lock_open</span></button>
+</div>
+</div>
+<!-- Hydraulic Actuators -->
+<div class="tree-node flex items-center justify-between px-2 py-1 rounded hover:bg-white text-black cursor-pointer border border-transparent hover:border-[#dcdfe4]" data-part="hydraulics">
+<div class="flex items-center gap-1.5 truncate">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">precision_manufacturing</span>
+<span class="truncate text-[11px]">Hydraulic_Pistons_Rig</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="node-vis-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">visibility</span></button>
+<button class="node-lock-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">lock_open</span></button>
+</div>
+</div>
+<!-- Ballistic Weapons Mount -->
+<div class="tree-node flex items-center justify-between px-2 py-1 rounded hover:bg-white text-black cursor-pointer border border-transparent hover:border-[#dcdfe4]" data-part="weapons">
+<div class="flex items-center gap-1.5 truncate">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">sports_handball</span>
+<span class="truncate text-[11px]">Shoulder_Gatling_Pods</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="node-vis-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">visibility</span></button>
+<button class="node-lock-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">lock_open</span></button>
+</div>
+</div>
+<!-- Kinetic Ground Leg Base -->
+<div class="tree-node flex items-center justify-between px-2 py-1 rounded hover:bg-white text-black cursor-pointer border border-transparent hover:border-[#dcdfe4]" data-part="legs">
+<div class="flex items-center gap-1.5 truncate">
+<span class="material-symbols-outlined text-[14px] text-on-surface-variant">view_in_ar</span>
+<span class="truncate text-[11px]">Bipedal_Leg_Struts</span>
+</div>
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="node-vis-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">visibility</span></button>
+<button class="node-lock-btn hover:text-black"><span class="material-symbols-outlined text-[13px]">lock_open</span></button>
+</div>
+</div>
+</div>
+</div>
+<!-- Collection 2: Studio Lights & Environment -->
+<div class="ml-3 pl-2 border-l border-[#dcdfe4] space-y-0.5 pt-1">
+<div class="flex items-center justify-between px-2 py-1 rounded text-black hover:bg-white cursor-pointer">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[12px] text-on-surface-variant">arrow_drop_down</span>
+<span class="material-symbols-outlined text-[14px] text-black">lightbulb</span>
+<span class="font-medium text-[11px]">Studio_Lighting_Rig</span>
+</div>
+<div class="flex items-center gap-1.5 text-on-surface-variant">
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">visibility</span>
+<span class="material-symbols-outlined text-[13px] hover:text-black cursor-pointer">lock_open</span>
+</div>
+</div>
+<div class="ml-3 pl-2 border-l border-[#dcdfe4] space-y-0.5">
+<div class="flex items-center justify-between px-2 py-0.5 rounded text-[10px] text-black hover:bg-white">
+<span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-black"></span>Key_Rim_5600K</span>
+<span class="font-label-code text-black font-semibold">1200 lx</span>
+</div>
+<div class="flex items-center justify-between px-2 py-0.5 rounded text-[10px] text-black hover:bg-white">
+<span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-on-surface-variant"></span>Fill_Neutral</span>
+<span class="font-label-code text-on-surface-variant font-semibold">450 lx</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Transform Coordinates Quick-Card (Docked bottom) -->
+<div class="p-2.5 bg-white border-t border-[#dcdfe4] space-y-2 shrink-0">
+<div class="flex items-center justify-between text-[11px] font-semibold text-black">
+<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[14px] text-black">transform</span>Transform (World)</span>
+<span class="font-label-code text-[10px] text-on-surface-variant">Euler XYZ</span>
+</div>
+<!-- Live Coordinate Numeric Scrubbers -->
+<div class="space-y-1 font-label-code text-[10px]">
+<!-- Location -->
+<div class="flex items-center gap-1">
+<span class="w-6 text-on-surface-variant">Pos</span>
+<div class="flex-1 grid grid-cols-3 gap-1">
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-black text-black font-semibold" id="pos-x">X 0.00</div>
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-[#64748b] text-black font-semibold" id="pos-y">Y 0.00</div>
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-[#94a3b8] text-black font-semibold" id="pos-z">Z 1.25</div>
+</div>
+</div>
+<!-- Rotation -->
+<div class="flex items-center gap-1">
+<span class="w-6 text-on-surface-variant">Rot</span>
+<div class="flex-1 grid grid-cols-3 gap-1">
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-black text-black font-semibold" id="rot-x">0°</div>
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-[#64748b] text-black font-semibold" id="rot-y">32°</div>
+<div class="bg-[#f0f2f5] px-1 py-0.5 rounded text-center border-l-2 border-[#94a3b8] text-black font-semibold" id="rot-z">18°</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- TAB CONTENT 2: MATERIAL & BSDF SHADER INSPECTOR -->
+<div class="tab-pane hidden flex-1 flex flex-col overflow-y-auto p-3 space-y-3" id="tab-material">
+<!-- Material Ball Preview Card -->
+<div class="bg-white rounded-lg p-2.5 border border-[#dcdfe4] flex items-center gap-3 shadow-sm">
+<div class="w-14 h-14 rounded-lg bg-[#e2e8f0] relative overflow-hidden flex items-center justify-center border border-[#dcdfe4]">
+<canvas class="rounded-full shadow-md" height="48" id="material-preview-ball" width="48"></canvas>
+</div>
+<div class="flex-1 min-w-0">
+<div class="text-[12px] font-semibold text-black truncate">M_Titanium_Apex_Composite</div>
+<div class="text-[10px] font-label-code text-on-surface-variant">Principled BSDF Monochrome</div>
+<div class="flex items-center gap-2 mt-1">
+<span class="text-[9px] bg-[#f0f2f5] text-black px-1.5 py-0.5 rounded font-label-code border border-[#dcdfe4]">PBR METALLIC</span>
+<span class="text-[9px] bg-[#f0f2f5] text-on-surface-variant px-1.5 py-0.5 rounded font-label-code border border-[#dcdfe4]">2K TEXTURES</span>
+</div>
+</div>
+</div>
+<!-- Realtime BSDF Sliders (Updates Viewport Canvas Instantly!) -->
+<div class="bg-white rounded-lg p-2.5 border border-[#dcdfe4] space-y-2.5 shadow-sm">
+<div class="text-[11px] font-bold text-black uppercase tracking-wider flex items-center justify-between">
+<span>Surface Parameters</span>
+<span class="text-[9px] text-black font-label-code bg-[#f0f2f5] px-1 py-0.5 rounded">LIVE UPDATE</span>
+</div>
+<!-- Base Color Picker Strip (Monochrome Grayscale Presets) -->
+<div class="space-y-1">
+<div class="flex justify-between text-[10px]">
+<span class="text-on-surface-variant">Base Value Tint</span>
+<span class="font-label-code text-black font-semibold" id="color-hex-val">#40444c</span>
+</div>
+<div class="flex items-center gap-2">
+<input class="w-8 h-6 rounded bg-transparent cursor-pointer border border-[#dcdfe4]" id="slider-base-color" type="color" value="#40444c"/>
+<div class="flex-1 flex gap-1">
+<button class="preset-color w-5 h-5 rounded-full bg-[#111318] border border-[#dcdfe4] hover:scale-110 transition-transform" data-color="#111318" title="Obsidian Charcoal"></button>
+<button class="preset-color w-5 h-5 rounded-full bg-[#334155] border border-[#dcdfe4] hover:scale-110 transition-transform" data-color="#334155" title="Slate Gray"></button>
+<button class="preset-color w-5 h-5 rounded-full bg-[#64748b] border border-[#dcdfe4] hover:scale-110 transition-transform" data-color="#64748b" title="Medium Graphite"></button>
+<button class="preset-color w-5 h-5 rounded-full bg-[#94a3b8] border border-[#dcdfe4] hover:scale-110 transition-transform" data-color="#94a3b8" title="Silver Gray"></button>
+<button class="preset-color w-5 h-5 rounded-full bg-[#f1f5f9] border border-[#cbd5e1] hover:scale-110 transition-transform" data-color="#f1f5f9" title="Pure Architectural White"></button>
+</div>
+</div>
+</div>
+<!-- Metallic Slider -->
+<div class="space-y-1">
+<div class="flex justify-between text-[10px]">
+<span class="text-on-surface-variant">Metallic</span>
+<span class="font-label-code text-black font-semibold" id="val-metallic">0.82</span>
+</div>
+<input class="w-full custom-range" id="slider-metallic" max="100" min="0" type="range" value="82"/>
+</div>
+<!-- Roughness Slider -->
+<div class="space-y-1">
+<div class="flex justify-between text-[10px]">
+<span class="text-on-surface-variant">Roughness / Gloss</span>
+<span class="font-label-code text-black font-semibold" id="val-roughness">0.24</span>
+</div>
+<input class="w-full custom-range" id="slider-roughness" max="100" min="0" type="range" value="24"/>
+</div>
+<!-- Normal Map Depth Slider -->
+<div class="space-y-1">
+<div class="flex justify-between text-[10px]">
+<span class="text-on-surface-variant">Normal Map Depth</span>
+<span class="font-label-code text-black font-semibold" id="val-normal">1.00</span>
+</div>
+<input class="w-full custom-range" id="slider-normal" max="200" min="0" type="range" value="100"/>
+</div>
+<!-- Emission Intensity Slider -->
+<div class="space-y-1">
+<div class="flex justify-between text-[10px]">
+<span class="text-on-surface-variant">Optic Emission Glow</span>
+<span class="font-label-code text-black font-semibold" id="val-emission">0.65</span>
+</div>
+<input class="w-full custom-range" id="slider-emission" max="100" min="0" type="range" value="65"/>
+</div>
+</div>
+<!-- Loaded Texture Maps Slot Table -->
+<div class="bg-white rounded-lg p-2.5 border border-[#dcdfe4] space-y-2 shadow-sm">
+<div class="text-[11px] font-bold text-black uppercase tracking-wider">Texture Slots</div>
+<div class="space-y-1.5 font-label-code text-[10px]">
+<div class="flex items-center justify-between p-1.5 rounded bg-[#f8f9fa] border border-[#dcdfe4]">
+<span class="flex items-center gap-1.5 text-black"><span class="w-2 h-2 rounded bg-black"></span>Base_Color.png</span>
+<span class="text-on-surface-variant">2048x2048</span>
+</div>
+<div class="flex items-center justify-between p-1.5 rounded bg-[#f8f9fa] border border-[#dcdfe4]">
+<span class="flex items-center gap-1.5 text-black"><span class="w-2 h-2 rounded bg-[#64748b]"></span>Normal_Mono.exr</span>
+<span class="text-black font-semibold">32-bit</span>
+</div>
+<div class="flex items-center justify-between p-1.5 rounded bg-[#f8f9fa] border border-[#dcdfe4]">
+<span class="flex items-center gap-1.5 text-black"><span class="w-2 h-2 rounded bg-[#94a3b8]"></span>Rough_Metal_AO.png</span>
+<span class="text-black font-semibold">Packed ORM</span>
+</div>
+</div>
+</div>
+</div>
+<!-- TAB CONTENT 3: DIAGNOSTICS & TOPOLOGY CHECKER -->
+<div class="tab-pane hidden flex-1 flex flex-col overflow-y-auto p-3 space-y-3" id="tab-diagnostics">
+<!-- Quality Health Badge Card -->
+<div class="bg-white rounded-lg p-3 border border-[#dcdfe4] flex items-center justify-between shadow-sm">
+<div>
+<div class="text-xs font-semibold text-black">Engine Compatibility</div>
+<div class="text-[10px] text-on-surface-variant">UE5 Nanite / Unity HDRP Verified</div>
+</div>
+<span class="px-2 py-1 rounded bg-[#111318] text-white border border-black text-[10px] font-bold font-label-code">GRADE A+</span>
+</div>
+<!-- Mesh Topology Metric Breakdown -->
+<div class="bg-white rounded-lg p-2.5 border border-[#dcdfe4] space-y-2 shadow-sm">
+<div class="text-[11px] font-bold text-black uppercase tracking-wider">Topology Audit</div>
+<div class="space-y-1 text-xs">
+<div class="flex justify-between py-1 border-b border-[#dcdfe4] text-[11px]">
+<span class="text-on-surface-variant">Quad Percentage:</span>
+<span class="text-black font-label-numeric font-bold">98.8%</span>
+</div>
+<div class="flex justify-between py-1 border-b border-[#dcdfe4] text-[11px]">
+<span class="text-on-surface-variant">Tris (Joints Only):</span>
+<span class="text-black font-label-numeric font-medium">1.2%</span>
+</div>
+<div class="flex justify-between py-1 border-b border-[#dcdfe4] text-[11px]">
+<span class="text-on-surface-variant">N-Gons:</span>
+<span class="text-black font-label-numeric font-bold">0 (Clean)</span>
+</div>
+<div class="flex justify-between py-1 border-b border-[#dcdfe4] text-[11px]">
+<span class="text-on-surface-variant">Non-Manifold Edges:</span>
+<span class="text-black font-label-numeric font-bold">0</span>
+</div>
+<div class="flex justify-between py-1 border-b border-[#dcdfe4] text-[11px]">
+<span class="text-on-surface-variant">Overlapping UVs:</span>
+<span class="text-black font-label-numeric font-medium">0.0%</span>
+</div>
+<div class="flex justify-between py-1 text-[11px]">
+<span class="text-on-surface-variant">UV Island Margin:</span>
+<span class="text-black font-label-numeric font-medium">16 px (Good)</span>
+</div>
+</div>
+</div>
+<!-- Action Diagnostics Buttons -->
+<div class="space-y-1.5">
+<button class="w-full py-1.5 rounded-md bg-white hover:bg-[#f0f2f5] text-black text-xs font-semibold border border-[#dcdfe4] flex items-center justify-center gap-1.5 transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[14px]">auto_fix_high</span>
+<span>Recalculate Normals Outside</span>
+</button>
+<button class="w-full py-1.5 rounded-md bg-white hover:bg-[#f0f2f5] text-black text-xs font-semibold border border-[#dcdfe4] flex items-center justify-center gap-1.5 transition-colors shadow-sm">
+<span class="material-symbols-outlined text-[14px]">cleaning_services</span>
+<span>Purge Degenerate Dissolves</span>
+</button>
+</div>
+</div>
+</aside>
+</div>
+<!-- FOOTER STATUS & WORKSPACE TELEMETRY STRIP -->
+<footer class="h-6 w-full bg-white border-t border-[#dcdfe4] px-3 flex items-center justify-between shrink-0 font-label-code text-[10px] text-on-surface-variant select-none z-50">
+<div class="flex items-center gap-3">
+<span class="flex items-center gap-1 text-black font-semibold">
+<span class="material-symbols-outlined text-[12px]">verified</span> Real-time Monochrome Shader Core v4.2
+    </span>
+<span class="text-[#dcdfe4]">|</span>
+<span class="hidden sm:inline">Active Pass: <strong class="text-black" id="footer-pass-status">Combined PBR</strong></span>
+<span class="text-[#dcdfe4] hidden sm:inline">|</span>
+<span class="hidden md:inline">Renderer: <span class="text-black font-semibold">Studio Neutral FastPath</span></span>
+</div>
+<div class="flex items-center gap-3">
+<span>Cursor: <span class="text-black font-semibold font-label-numeric" id="cursor-pos">X: 0.0 Y: 0.0</span></span>
+<span class="text-[#dcdfe4]">|</span>
+<span class="text-black font-semibold">Ready · Turntable 60FPS</span>
+</div>
+</footer>
+<!-- 3D INTERACTIVE RENDER ENGINE SCRIPT -->
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // DOM Elements
+  const canvas = document.getElementById('viewport-canvas');
+  const ctx = canvas.getContext('2d');
+  const gizmoCanvas = document.getElementById('gizmo-compass-canvas');
+  const gizmoCtx = gizmoCanvas.getContext('2d');
+  const matBallCanvas = document.getElementById('material-preview-ball');
+  const matBallCtx = matBallCanvas.getContext('2d');
+
+  // Real-time parameters
+  let rotX = 18;      // Pitch in degrees
+  let rotY = 35;      // Yaw in degrees
+  let zoom = 1.0;     // Scale multiplier
+  let panX = 0;       // Screen pan X
+  let panY = 0;       // Screen pan Y
+  let lightAngle = 45;// Direction of light
+  let wireOpacity = 0.65;
+  let currentPass = 'combined';
+  let isAutoSpin = true;
+  let overlaysVisible = true;
+  let baseColor = '#40444c';
+  let metallic = 0.82;
+  let roughness = 0.24;
+  let normalStrength = 1.0;
+  let emission = 0.65;
+
+  // Layer Visibility from Outliner
+  const partVisibility = {
+    chassis: true,
+    cockpit: true,
+    hydraulics: true,
+    weapons: true,
+    legs: true
+  };
+
+  // Interaction State
+  let isDragging = false;
+  let lastMouseX = 0;
+  let lastMouseY = 0;
+  let dragMode = 'orbit';
+
+  // Performance telemetry
+  let lastFrameTime = performance.now();
+  let frameCount = 0;
+  let fps = 60.0;
+  const fpsDisplay = document.getElementById('live-fps');
+  const orbitReadout = document.getElementById('hud-orbit-readout');
+  const rotXDisplay = document.getElementById('rot-x');
+  const rotYDisplay = document.getElementById('rot-y');
+  const rotZDisplay = document.getElementById('rot-z');
+  const cursorPosDisplay = document.getElementById('cursor-pos');
+
+  // High-DPI Canvas Resizing
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // 3D Procedural Sci-Fi Mech Geometry Definition
+  const vertices = [
+    { x: -0.6, y: -0.8, z: -0.5, part: 'chassis' },
+    { x: 0.6, y: -0.8, z: -0.5, part: 'chassis' },
+    { x: 0.7, y: 0.2, z: -0.6, part: 'chassis' },
+    { x: -0.7, y: 0.2, z: -0.6, part: 'chassis' },
+    { x: -0.5, y: -0.7, z: 0.6, part: 'cockpit' },
+    { x: 0.5, y: -0.7, z: 0.6, part: 'cockpit' },
+    { x: 0.6, y: 0.1, z: 0.7, part: 'cockpit' },
+    { x: -0.6, y: 0.1, z: 0.7, part: 'cockpit' },
+    { x: 0.0, y: -0.4, z: 0.85, part: 'cockpit' },
+    { x: -0.3, y: -0.1, z: 0.75, part: 'cockpit' },
+    { x: 0.3, y: -0.1, z: 0.75, part: 'cockpit' },
+    { x: -1.2, y: -0.6, z: 0.1, part: 'weapons' },
+    { x: -1.3, y: -0.2, z: -0.4, part: 'weapons' },
+    { x: -1.1, y: 0.2, z: 0.2, part: 'weapons' },
+    { x: 1.2, y: -0.6, z: 0.1, part: 'weapons' },
+    { x: 1.3, y: -0.2, z: -0.4, part: 'weapons' },
+    { x: 1.1, y: 0.2, z: 0.2, part: 'weapons' },
+    { x: -1.3, y: 0.8, z: 0.4, part: 'weapons' },
+    { x: 1.3, y: 0.8, z: 0.4, part: 'weapons' },
+    { x: -0.4, y: 0.5, z: -0.2, part: 'hydraulics' },
+    { x: 0.4, y: 0.5, z: -0.2, part: 'hydraulics' },
+    { x: 0.0, y: 0.7, z: 0.2, part: 'hydraulics' },
+    { x: -0.7, y: 1.2, z: 0.1, part: 'legs' },
+    { x: 0.7, y: 1.2, z: 0.1, part: 'legs' },
+    { x: -0.9, y: 1.9, z: 0.5, part: 'legs' },
+    { x: -0.6, y: 1.9, z: -0.5, part: 'legs' },
+    { x: 0.9, y: 1.9, z: 0.5, part: 'legs' },
+    { x: 0.6, y: 1.9, z: -0.5, part: 'legs' }
+  ];
+
+  const polygons = [
+    { indices: [4, 5, 10, 8, 9], part: 'cockpit', isGlass: true },
+    { indices: [7, 6, 10, 9], part: 'cockpit', isGlass: true },
+    { indices: [4, 9, 3, 0], part: 'chassis' },
+    { indices: [5, 10, 2, 1], part: 'chassis' },
+    { indices: [0, 1, 5, 4], part: 'chassis' },
+    { indices: [3, 2, 6, 7], part: 'chassis' },
+    { indices: [0, 4, 11, 12], part: 'weapons' },
+    { indices: [11, 12, 13], part: 'weapons' },
+    { indices: [11, 13, 17], part: 'weapons', isBarrel: true },
+    { indices: [1, 5, 14, 15], part: 'weapons' },
+    { indices: [14, 15, 16], part: 'weapons' },
+    { indices: [14, 16, 18], part: 'weapons', isBarrel: true },
+    { indices: [3, 7, 21, 19], part: 'hydraulics' },
+    { indices: [2, 6, 21, 20], part: 'hydraulics' },
+    { indices: [19, 21, 22], part: 'legs' },
+    { indices: [22, 24, 25], part: 'legs', isFoot: true },
+    { indices: [20, 21, 23], part: 'legs' },
+    { indices: [23, 26, 27], part: 'legs', isFoot: true }
+  ];
+
+  function projectPoint(point, width, height, scale, rX, rY, pX, pY) {
+    const radX = (rX * Math.PI) / 180;
+    const radY = (rY * Math.PI) / 180;
+
+    const cosY = Math.cos(radY);
+    const sinY = Math.sin(radY);
+    const x1 = point.x * cosY - point.z * sinY;
+    const z1 = point.x * sinY + point.z * cosY;
+
+    const cosX = Math.cos(radX);
+    const sinX = Math.sin(radX);
+    const y2 = point.y * cosX - z1 * sinX;
+    const z2 = point.y * sinX + z1 * cosX;
+
+    const cameraDist = 3.6;
+    const fovFactor = cameraDist / (cameraDist + z2);
+    const projScale = scale * fovFactor;
+
+    return {
+      x: width / 2 + x1 * projScale + pX,
+      y: height / 2 + y2 * projScale + pY,
+      z: z2,
+      rawX: x1,
+      rawY: y2,
+      rawZ: z2
+    };
+  }
+
+  // Draw Authentic Blender 3D Ground Plane Grid with Axis Lines, Subdivisions, Circular Falloff & Contact Shadow
+  function drawPerspectiveGrid(context, w, h, rX, rY, scale, pX, pY) {
+    context.save();
+    const gridY = 1.9; // Base ground height beneath the mech's feet
+    const gridLimit = 7.0; // Outer grid boundary in 3D units
+    const centerPt = projectPoint({ x: 0, y: gridY, z: 0 }, w, h, scale, rX, rY, pX, pY);
+
+    // 1. Subtle Blender Contact Shadow Catcher underneath mech contact points
+    const shadowRadX = scale * 1.05;
+    const shadowRadY = scale * 0.28;
+    const shadowGrad = context.createRadialGradient(centerPt.x, centerPt.y, 4, centerPt.x, centerPt.y, shadowRadX);
+    shadowGrad.addColorStop(0, 'rgba(15, 23, 42, 0.28)');
+    shadowGrad.addColorStop(0.35, 'rgba(30, 41, 59, 0.14)');
+    shadowGrad.addColorStop(0.7, 'rgba(51, 65, 85, 0.04)');
+    shadowGrad.addColorStop(1, 'rgba(51, 65, 85, 0)');
+    context.fillStyle = shadowGrad;
+    context.beginPath();
+    context.ellipse(centerPt.x, centerPt.y, shadowRadX, shadowRadY, 0, 0, Math.PI * 2);
+    context.fill();
+
+    // 2. Offscreen / Temp Canvas for the Blender Ground Plane with smooth circular radial falloff mask
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = w;
+    tempCanvas.height = h;
+    const tCtx = tempCanvas.getContext('2d');
+
+    // Minor Grid Lines (0.2m increments)
+    tCtx.lineWidth = 0.8;
+    for (let c = -gridLimit; c <= gridLimit + 0.001; c += 0.2) {
+      if (Math.abs(c % 1.0) < 0.05 || Math.abs(c % 1.0 - 1.0) < 0.05) continue; // Skip majors
+      tCtx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+
+      // Along Z (parallel to Z axis)
+      const pZ1 = projectPoint({ x: c, y: gridY, z: -gridLimit }, w, h, scale, rX, rY, pX, pY);
+      const pZ2 = projectPoint({ x: c, y: gridY, z: gridLimit }, w, h, scale, rX, rY, pX, pY);
+      tCtx.beginPath();
+      tCtx.moveTo(pZ1.x, pZ1.y);
+      tCtx.lineTo(pZ2.x, pZ2.y);
+      tCtx.stroke();
+
+      // Along X (parallel to X axis)
+      const pX1 = projectPoint({ x: -gridLimit, y: gridY, z: c }, w, h, scale, rX, rY, pX, pY);
+      const pX2 = projectPoint({ x: gridLimit, y: gridY, z: c }, w, h, scale, rX, rY, pX, pY);
+      tCtx.beginPath();
+      tCtx.moveTo(pX1.x, pX1.y);
+      tCtx.lineTo(pX2.x, pX2.y);
+      tCtx.stroke();
+    }
+
+    // Major Grid Lines (1.0m primary subdivisions)
+    tCtx.lineWidth = 1.1;
+    for (let m = -gridLimit; m <= gridLimit + 0.001; m += 1.0) {
+      if (Math.abs(m) < 0.05) continue; // Skip origin primary axes
+      tCtx.strokeStyle = 'rgba(100, 116, 139, 0.45)';
+
+      // Parallel to Z
+      const pZ1 = projectPoint({ x: m, y: gridY, z: -gridLimit }, w, h, scale, rX, rY, pX, pY);
+      const pZ2 = projectPoint({ x: m, y: gridY, z: gridLimit }, w, h, scale, rX, rY, pX, pY);
+      tCtx.beginPath();
+      tCtx.moveTo(pZ1.x, pZ1.y);
+      tCtx.lineTo(pZ2.x, pZ2.y);
+      tCtx.stroke();
+
+      // Parallel to X
+      const pX1 = projectPoint({ x: -gridLimit, y: gridY, z: m }, w, h, scale, rX, rY, pX, pY);
+      const pX2 = projectPoint({ x: gridLimit, y: gridY, z: m }, w, h, scale, rX, rY, pX, pY);
+      tCtx.beginPath();
+      tCtx.moveTo(pX1.x, pX1.y);
+      tCtx.lineTo(pX2.x, pX2.y);
+      tCtx.stroke();
+    }
+
+    // 3. Signature Blender Coordinate Axes:
+    // Red X-Axis (#e05353) running along world X across the floor plane
+    const xStart = projectPoint({ x: -gridLimit, y: gridY, z: 0 }, w, h, scale, rX, rY, pX, pY);
+    const xEnd = projectPoint({ x: gridLimit, y: gridY, z: 0 }, w, h, scale, rX, rY, pX, pY);
+    tCtx.strokeStyle = '#e05353';
+    tCtx.lineWidth = 2.0;
+    tCtx.beginPath();
+    tCtx.moveTo(xStart.x, xStart.y);
+    tCtx.lineTo(xEnd.x, xEnd.y);
+    tCtx.stroke();
+
+    // Green Y/Depth Ground Axis (#43a047 / Blender green) along world Z ground line
+    const yStart = projectPoint({ x: 0, y: gridY, z: -gridLimit }, w, h, scale, rX, rY, pX, pY);
+    const yEnd = projectPoint({ x: 0, y: gridY, z: gridLimit }, w, h, scale, rX, rY, pX, pY);
+    tCtx.strokeStyle = '#43a047';
+    tCtx.lineWidth = 2.0;
+    tCtx.beginPath();
+    tCtx.moveTo(yStart.x, yStart.y);
+    tCtx.lineTo(yEnd.x, yEnd.y);
+    tCtx.stroke();
+
+    // 4. Apply Blender's signature Radial Circular Gradient Falloff (Destination-In fade)
+    tCtx.globalCompositeOperation = 'destination-in';
+    const maxRadius = Math.max(w, h) * 0.55;
+    const fadeGrad = tCtx.createRadialGradient(centerPt.x, centerPt.y, maxRadius * 0.12, centerPt.x, centerPt.y, maxRadius);
+    fadeGrad.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    fadeGrad.addColorStop(0.55, 'rgba(0, 0, 0, 0.85)');
+    fadeGrad.addColorStop(0.82, 'rgba(0, 0, 0, 0.35)');
+    fadeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    tCtx.fillStyle = fadeGrad;
+    tCtx.fillRect(0, 0, w, h);
+
+    // Blit masked floor grid onto main context
+    context.drawImage(tempCanvas, 0, 0);
+
+    // 5. Blender 3D Cursor / Center Origin Target indicator at (0, 0, 0)
+    context.save();
+    context.strokeStyle = '#dc2626';
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.arc(centerPt.x, centerPt.y, 7, 0, Math.PI * 2);
+    context.stroke();
+
+    // Dashed inner crosshair ring styling
+    context.strokeStyle = '#ffffff';
+    context.setLineDash([2, 2]);
+    context.lineWidth = 1;
+    context.beginPath();
+    context.arc(centerPt.x, centerPt.y, 7, 0, Math.PI * 2);
+    context.stroke();
+    context.setLineDash([]);
+
+    // Central origin dot
+    context.fillStyle = '#ffffff';
+    context.beginPath();
+    context.arc(centerPt.x, centerPt.y, 2.5, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = '#111318';
+    context.lineWidth = 1;
+    context.stroke();
+    context.restore();
+
+    context.restore();
+  }
+
+  // Draw 3D Orientation Mini Gizmo Compass (Monochrome Minimalist)
+  function drawGizmoCompass() {
+    const w = gizmoCanvas.width;
+    const h = gizmoCanvas.height;
+    gizmoCtx.clearRect(0, 0, w, h);
+
+    const radX = (rotX * Math.PI) / 180;
+    const radY = (rotY * Math.PI) / 180;
+    const len = 24;
+
+    const axes = [
+      { name: 'X', color: '#111318', dir: { x: 1, y: 0, z: 0 } },
+      { name: 'Y', color: '#475569', dir: { x: 0, y: -1, z: 0 } },
+      { name: 'Z', color: '#94a3b8', dir: { x: 0, y: 0, z: 1 } }
+    ];
+
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const projAxes = axes.map(axis => {
+      const cosY = Math.cos(radY);
+      const sinY = Math.sin(radY);
+      const x1 = axis.dir.x * cosY - axis.dir.z * sinY;
+      const z1 = axis.dir.x * sinY + axis.dir.z * cosY;
+
+      const cosX = Math.cos(radX);
+      const sinX = Math.sin(radX);
+      const y2 = axis.dir.y * cosX - z1 * sinX;
+      const z2 = axis.dir.y * sinX + z1 * cosX;
+
+      return {
+        name: axis.name,
+        color: axis.color,
+        px: cx + x1 * len,
+        py: cy + y2 * len,
+        depth: z2
+      };
+    });
+
+    projAxes.sort((a, b) => a.depth - b.depth);
+
+    gizmoCtx.beginPath();
+    gizmoCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+    gizmoCtx.fillStyle = '#111318';
+    gizmoCtx.fill();
+
+    projAxes.forEach(ax => {
+      gizmoCtx.strokeStyle = ax.color;
+      gizmoCtx.lineWidth = 2;
+      gizmoCtx.lineCap = 'round';
+      gizmoCtx.beginPath();
+      gizmoCtx.moveTo(cx, cy);
+      gizmoCtx.lineTo(ax.px, ax.py);
+      gizmoCtx.stroke();
+
+      gizmoCtx.fillStyle = ax.color;
+      gizmoCtx.beginPath();
+      gizmoCtx.arc(ax.px, ax.py, 5.5, 0, Math.PI * 2);
+      gizmoCtx.fill();
+
+      gizmoCtx.fillStyle = '#ffffff';
+      gizmoCtx.font = 'bold 7px JetBrains Mono';
+      gizmoCtx.textAlign = 'center';
+      gizmoCtx.textBaseline = 'middle';
+      gizmoCtx.fillText(ax.name, ax.px, ax.py);
+    });
+  }
+
+  // Draw Material Sphere Thumbnail in tab 2
+  function drawMaterialBall() {
+    const w = matBallCanvas.width;
+    const h = matBallCanvas.height;
+    matBallCtx.clearRect(0, 0, w, h);
+
+    const grad = matBallCtx.createRadialGradient(w * 0.35, h * 0.3, 2, w * 0.5, h * 0.5, w * 0.5);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.2, baseColor);
+    grad.addColorStop(0.8, '#1e293b');
+    grad.addColorStop(1, '#090d16');
+
+    matBallCtx.fillStyle = grad;
+    matBallCtx.beginPath();
+    matBallCtx.arc(w / 2, h / 2, w / 2 - 2, 0, Math.PI * 2);
+    matBallCtx.fill();
+
+    const specGrad = matBallCtx.createRadialGradient(w * 0.35, h * 0.28, 1, w * 0.35, h * 0.28, 14 * (1.1 - roughness));
+    specGrad.addColorStop(0, `rgba(255, 255, 255, ${0.9 * (1.1 - roughness)})`);
+    specGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    matBallCtx.fillStyle = specGrad;
+    matBallCtx.beginPath();
+    matBallCtx.arc(w * 0.35, h * 0.28, 12, 0, Math.PI * 2);
+    matBallCtx.fill();
+  }
+
+  // Main Render Loop for Central Viewport
+  function renderViewport() {
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    ctx.clearRect(0, 0, width, height);
+
+    // Studio Background subtle radial wash
+    const bgGrad = ctx.createRadialGradient(width / 2, height / 2, 50, width / 2, height / 2, Math.max(width, height) * 0.7);
+    bgGrad.addColorStop(0, '#f8fafc');
+    bgGrad.addColorStop(1, '#e5e9f0');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    const baseUnitScale = Math.min(width, height) * 0.26 * zoom;
+
+    if (overlaysVisible) {
+      drawPerspectiveGrid(ctx, width, height, rotX, rotY, baseUnitScale, panX, panY);
+    }
+
+    const projectedVertices = vertices.map(v =>
+      projectPoint(v, width, height, baseUnitScale, rotX, rotY, panX, panY)
+    );
+
+    const sortedPolys = polygons.map(poly => {
+      let sumZ = 0;
+      poly.indices.forEach(idx => {
+        sumZ += projectedVertices[idx].z;
+      });
+      const avgZ = sumZ / poly.indices.length;
+
+      const p0 = projectedVertices[poly.indices[0]];
+      const p1 = projectedVertices[poly.indices[1]];
+      const p2 = projectedVertices[poly.indices[2]];
+
+      const vA = { x: p1.rawX - p0.rawX, y: p1.rawY - p0.rawY, z: p1.rawZ - p0.rawZ };
+      const vB = { x: p2.rawX - p0.rawX, y: p2.rawY - p0.rawY, z: p2.rawZ - p0.rawZ };
+      let nx = vA.y * vB.z - vA.z * vB.y;
+      let ny = vA.z * vB.x - vA.x * vB.z;
+      let nz = vA.x * vB.y - vA.y * vB.x;
+      const mag = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= mag;
+      ny /= mag;
+      nz /= mag;
+
+      const lRad = (lightAngle * Math.PI) / 180;
+      const lx = Math.cos(lRad);
+      const ly = -0.5;
+      const lz = Math.sin(lRad);
+
+      const dot = Math.max(0.18, -(nx * lx + ny * ly + nz * lz));
+
+      return {
+        ...poly,
+        avgZ,
+        normal: { x: nx, y: ny, z: nz },
+        lightIntensity: dot
+      };
+    });
+
+    sortedPolys.sort((a, b) => b.avgZ - a.avgZ);
+
+    sortedPolys.forEach(poly => {
+      if (!partVisibility[poly.part]) return;
+
+      ctx.beginPath();
+      poly.indices.forEach((vIdx, i) => {
+        const pt = projectedVertices[vIdx];
+        if (i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.closePath();
+
+      // MONOCHROME SHADER RENDERING
+      if (currentPass === 'combined') {
+        if (poly.isGlass) {
+          ctx.fillStyle = `rgba(71, 85, 105, ${0.35 * (0.8 + emission * 0.4)})`;
+        } else if (poly.isBarrel) {
+          const bVal = Math.floor(40 + poly.lightIntensity * 60);
+          ctx.fillStyle = `rgb(${bVal}, ${bVal}, ${bVal})`;
+        } else {
+          const r = parseInt(baseColor.slice(1, 3), 16);
+          const g = parseInt(baseColor.slice(3, 5), 16);
+          const b = parseInt(baseColor.slice(5, 7), 16);
+
+          const spec = Math.pow(poly.lightIntensity, 12 * (1.1 - roughness)) * metallic * 180;
+          const finalR = Math.min(255, Math.floor(r * poly.lightIntensity + spec));
+          const finalG = Math.min(255, Math.floor(g * poly.lightIntensity + spec));
+          const finalB = Math.min(255, Math.floor(b * poly.lightIntensity + spec));
+
+          ctx.fillStyle = `rgb(${finalR}, ${finalG}, ${finalB})`;
+        }
+        ctx.fill();
+
+      } else if (currentPass === 'albedo') {
+        if (poly.isGlass) ctx.fillStyle = '#94a3b8';
+        else if (poly.isBarrel) ctx.fillStyle = '#334155';
+        else ctx.fillStyle = baseColor;
+        ctx.fill();
+
+      } else if (currentPass === 'normal') {
+        // Monochrome Normal map inspection
+        const monoNorm = Math.floor(((poly.normal.x + poly.normal.y + poly.normal.z) / 3 * 0.5 + 0.5) * 255);
+        ctx.fillStyle = `rgb(${monoNorm}, ${monoNorm}, ${monoNorm})`;
+        ctx.fill();
+
+      } else if (currentPass === 'roughness') {
+        const val = Math.floor(roughness * 255);
+        ctx.fillStyle = `rgb(${val}, ${val}, ${val})`;
+        ctx.fill();
+
+      } else if (currentPass === 'matcap') {
+        const clayIntensity = Math.floor(80 + poly.lightIntensity * 140);
+        ctx.fillStyle = `rgb(${clayIntensity}, ${clayIntensity}, ${clayIntensity})`;
+        ctx.fill();
+
+      } else if (currentPass === 'xray') {
+        ctx.fillStyle = 'rgba(17, 19, 24, 0.1)';
+        ctx.fill();
+
+      } else if (currentPass === 'wireframe') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
+
+      // Wireframe Outline Overlays
+      if (overlaysVisible || currentPass === 'wireframe') {
+        const wireAlpha = currentPass === 'wireframe' ? 1.0 : wireOpacity;
+        if (poly.isGlass) {
+          ctx.strokeStyle = `rgba(100, 116, 139, ${wireAlpha})`;
+        } else if (poly.part === 'chassis') {
+          ctx.strokeStyle = `rgba(17, 19, 24, ${wireAlpha})`;
+        } else {
+          ctx.strokeStyle = `rgba(71, 85, 105, ${wireAlpha * 0.8})`;
+        }
+        ctx.lineWidth = currentPass === 'wireframe' ? 1.2 : 0.9;
+        ctx.stroke();
+      }
+    });
+
+    // Vertex Nodes & Center Gizmo
+    if (overlaysVisible) {
+      projectedVertices.forEach(v => {
+        if (!partVisibility[v.part]) return;
+        ctx.fillStyle = '#111318';
+        ctx.beginPath();
+        ctx.arc(v.x, v.y, 1.75, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      const origin = projectPoint({ x: 0, y: 0.2, z: 0 }, width, height, baseUnitScale, rotX, rotY, panX, panY);
+      
+      // X-Axis (Dark Charcoal)
+      const gX = projectPoint({ x: 0.4, y: 0.2, z: 0 }, width, height, baseUnitScale, rotX, rotY, panX, panY);
+      ctx.strokeStyle = '#111318';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(gX.x, gX.y);
+      ctx.stroke();
+
+      // Y-Axis (Medium Slate)
+      const gY = projectPoint({ x: 0, y: -0.2, z: 0 }, width, height, baseUnitScale, rotX, rotY, panX, panY);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(gY.x, gY.y);
+      ctx.stroke();
+
+      // Z-Axis (Light Slate)
+      const gZ = projectPoint({ x: 0, y: 0.2, z: 0.4 }, width, height, baseUnitScale, rotX, rotY, panX, panY);
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(gZ.x, gZ.y);
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#111318';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(origin.x, origin.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    orbitReadout.textContent = `Pitch: ${Math.round(rotX)}° · Yaw: ${Math.round(rotY)}°`;
+    rotXDisplay.textContent = `${Math.round(rotX)}°`;
+    rotYDisplay.textContent = `${Math.round(rotY)}°`;
+    rotZDisplay.textContent = `${Math.round(lightAngle)}°`;
+
+    drawGizmoCompass();
+  }
+
+  function animationLoop(timestamp) {
+    if (isAutoSpin && !isDragging) {
+      rotY = (rotY + 0.35) % 360;
+    }
+
+    renderViewport();
+
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFrameTime >= 500) {
+      fps = ((frameCount * 1000) / (now - lastFrameTime)).toFixed(1);
+      fpsDisplay.textContent = fps;
+      frameCount = 0;
+      lastFrameTime = now;
+    }
+
+    requestAnimationFrame(animationLoop);
+  }
+  requestAnimationFrame(animationLoop);
+
+  // Mouse Handlers
+  canvas.addEventListener('mousedown', e => {
+    isDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    dragMode = (e.button === 2 || e.shiftKey) ? 'pan' : 'orbit';
+  });
+
+  window.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    cursorPosDisplay.textContent = `X: ${(e.clientX - rect.left).toFixed(0)} Y: ${(e.clientY - rect.top).toFixed(0)}`;
+
+    if (!isDragging) return;
+
+    const deltaX = e.clientX - lastMouseX;
+    const deltaY = e.clientY - lastMouseY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+
+    if (dragMode === 'orbit') {
+      rotY = (rotY + deltaX * 0.6) % 360;
+      rotX = Math.max(-85, Math.min(85, rotX - deltaY * 0.6));
+    } else if (dragMode === 'pan') {
+      panX += deltaX;
+      panY += deltaY;
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
+
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const zoomDelta = e.deltaY < 0 ? 1.08 : 0.92;
+    zoom = Math.max(0.3, Math.min(3.5, zoom * zoomDelta));
+    document.getElementById('hud-fov').textContent = `Zoom: ${zoom.toFixed(2)}x`;
+  }, { passive: false });
+
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Shading Pass Buttons
+  const passButtons = document.querySelectorAll('.pass-btn');
+  const footerPassStatus = document.getElementById('footer-pass-status');
+
+  passButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      passButtons.forEach(b => {
+        b.classList.remove('bg-[#111318]', 'text-white', 'shadow-sm');
+        b.classList.add('text-on-surface-variant');
+      });
+      btn.classList.add('bg-[#111318]', 'text-white', 'shadow-sm');
+      btn.classList.remove('text-on-surface-variant');
+
+      currentPass = btn.dataset.pass;
+      footerPassStatus.textContent = btn.title || currentPass.toUpperCase();
+    });
+  });
+
+  // Turntable Auto-Spin Toggle
+  const btnAutoSpin = document.getElementById('btn-autospin');
+  const autospinIcon = document.getElementById('autospin-icon');
+  const autospinText = document.getElementById('autospin-text');
+
+  btnAutoSpin.addEventListener('click', () => {
+    isAutoSpin = !isAutoSpin;
+    if (isAutoSpin) {
+      btnAutoSpin.classList.add('text-black', 'border-black');
+      autospinIcon.classList.add('text-black');
+      autospinText.textContent = 'Spinning';
+    } else {
+      btnAutoSpin.classList.remove('text-black', 'border-black');
+      autospinIcon.classList.remove('text-black');
+      autospinText.textContent = 'Paused';
+    }
+  });
+
+  // Overlays Toggle
+  const btnOverlays = document.getElementById('btn-toggle-overlays');
+  btnOverlays.addEventListener('click', () => {
+    overlaysVisible = !overlaysVisible;
+    btnOverlays.classList.toggle('text-black', overlaysVisible);
+    btnOverlays.classList.toggle('border-black', overlaysVisible);
+  });
+
+  // Viewport Sliders
+  const lightSlider = document.getElementById('light-angle-slider');
+  const lightVal = document.getElementById('light-angle-val');
+  lightSlider.addEventListener('input', e => {
+    lightAngle = parseFloat(e.target.value);
+    lightVal.textContent = `${lightAngle}°`;
+  });
+
+  const wireSlider = document.getElementById('wire-opacity-slider');
+  const wireVal = document.getElementById('wire-opacity-val');
+  wireSlider.addEventListener('input', e => {
+    wireOpacity = parseFloat(e.target.value) / 100;
+    wireVal.textContent = `${e.target.value}%`;
+  });
+
+  // Gizmo Compass Axis Alignment
+  gizmoCanvas.addEventListener('click', e => {
+    const rect = gizmoCanvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left - gizmoCanvas.width / 2;
+    const clickY = e.clientY - rect.top - gizmoCanvas.height / 2;
+
+    if (Math.abs(clickX) > Math.abs(clickY)) {
+      rotX = 0;
+      rotY = clickX > 0 ? 90 : -90;
+    } else {
+      rotX = clickY < 0 ? 90 : 0;
+      rotY = 0;
+    }
+    document.getElementById('view-perspective-name').textContent = 'ORTHOGRAPHIC SNAP';
+  });
+
+  document.getElementById('btn-zoom-in').addEventListener('click', () => {
+    zoom = Math.min(3.5, zoom * 1.15);
+  });
+  document.getElementById('btn-zoom-out').addEventListener('click', () => {
+    zoom = Math.max(0.3, zoom * 0.85);
+  });
+  document.getElementById('btn-reset-cam').addEventListener('click', () => {
+    rotX = 18;
+    rotY = 35;
+    zoom = 1.0;
+    panX = 0;
+    panY = 0;
+    document.getElementById('view-perspective-name').textContent = 'PERSPECTIVE CAMERA';
+  });
+
+  // Quad-View Split View Toggle
+  const toggleQuadBtn = document.getElementById('toggle-quadview');
+  const singleView = document.getElementById('single-viewport');
+  const quadGrid = document.getElementById('quad-viewport-grid');
+  const quadLabel = document.getElementById('quadview-label');
+  let isQuad = false;
+
+  toggleQuadBtn.addEventListener('click', () => {
+    isQuad = !isQuad;
+    if (isQuad) {
+      singleView.classList.add('hidden');
+      quadGrid.classList.remove('hidden');
+      quadLabel.textContent = '4-View';
+      toggleQuadBtn.classList.add('bg-[#111318]', 'text-white');
+      renderQuadViews();
+    } else {
+      singleView.classList.remove('hidden');
+      quadGrid.classList.add('hidden');
+      quadLabel.textContent = 'Single';
+      toggleQuadBtn.classList.remove('bg-[#111318]', 'text-white');
+      resizeCanvas();
+    }
+  });
+
+  function renderQuadViews() {
+    const quadCanvases = [
+      { id: 'quad-canvas-top', rx: 90, ry: 0 },
+      { id: 'quad-canvas-front', rx: 0, ry: 0 },
+      { id: 'quad-canvas-right', rx: 0, ry: 90 },
+      { id: 'quad-canvas-persp', rx: rotX, ry: rotY }
+    ];
+
+    quadCanvases.forEach(cfg => {
+      const qCanv = document.getElementById(cfg.id);
+      if (!qCanv) return;
+      qCanv.width = qCanv.clientWidth * (window.devicePixelRatio || 1);
+      qCanv.height = qCanv.clientHeight * (window.devicePixelRatio || 1);
+      const qCtx = qCanv.getContext('2d');
+      qCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+      const qw = qCanv.clientWidth;
+      const qh = qCanv.clientHeight;
+      const qScale = Math.min(qw, qh) * 0.28;
+
+      // Clear with soft studio gray
+      qCtx.fillStyle = '#f8fafc';
+      qCtx.fillRect(0, 0, qw, qh);
+
+      drawPerspectiveGrid(qCtx, qw, qh, cfg.rx, cfg.ry, qScale, 0, 0);
+
+      const qProj = vertices.map(v => projectPoint(v, qw, qh, qScale, cfg.rx, cfg.ry, 0, 0));
+      polygons.forEach(poly => {
+        qCtx.beginPath();
+        poly.indices.forEach((idx, i) => {
+          const pt = qProj[idx];
+          if (i === 0) qCtx.moveTo(pt.x, pt.y);
+          else qCtx.lineTo(pt.x, pt.y);
+        });
+        qCtx.closePath();
+        qCtx.fillStyle = '#e2e8f0';
+        qCtx.fill();
+        qCtx.strokeStyle = '#111318';
+        qCtx.lineWidth = 0.8;
+        qCtx.stroke();
+      });
+    });
+  }
+
+  // Right Panel Tab Switcher
+  const inspectorTabs = document.querySelectorAll('.inspector-tab');
+  const tabPanes = document.querySelectorAll('.tab-pane');
+
+  inspectorTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      inspectorTabs.forEach(t => {
+        t.classList.remove('bg-[#111318]', 'text-white', 'shadow-sm');
+        t.classList.add('text-on-surface-variant');
+      });
+      tab.classList.add('bg-[#111318]', 'text-white', 'shadow-sm');
+      tab.classList.remove('text-on-surface-variant');
+
+      const targetId = tab.dataset.tab;
+      tabPanes.forEach(pane => {
+        pane.classList.add('hidden');
+      });
+      document.getElementById(targetId).classList.remove('hidden');
+
+      if (targetId === 'tab-material') {
+        drawMaterialBall();
+      }
+    });
+  });
+
+  // Right Panel Collapse Toggle
+  const rightPanel = document.getElementById('right-inspector');
+  const toggleRightBtn = document.getElementById('toggle-right-panel');
+  let panelCollapsed = false;
+
+  toggleRightBtn.addEventListener('click', () => {
+    panelCollapsed = !panelCollapsed;
+    if (panelCollapsed) {
+      rightPanel.classList.add('w-0', 'border-l-0', 'p-0');
+      rightPanel.classList.remove('w-80', 'md:w-84', 'xl:w-96');
+    } else {
+      rightPanel.classList.remove('w-0', 'border-l-0', 'p-0');
+      rightPanel.classList.add('w-80', 'md:w-84', 'xl:w-96');
+    }
+    setTimeout(resizeCanvas, 320);
+  });
+
+  // Outliner Part Visibility
+  const treeNodes = document.querySelectorAll('.tree-node');
+  treeNodes.forEach(node => {
+    const part = node.dataset.part;
+    const visBtn = node.querySelector('.node-vis-btn');
+    const visIcon = visBtn.querySelector('.material-symbols-outlined');
+
+    visBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      partVisibility[part] = !partVisibility[part];
+      if (partVisibility[part]) {
+        visIcon.textContent = 'visibility';
+        visIcon.classList.remove('text-outline');
+        node.classList.remove('opacity-40');
+      } else {
+        visIcon.textContent = 'visibility_off';
+        visIcon.classList.add('text-outline');
+        node.classList.add('opacity-40');
+      }
+    });
+
+    node.addEventListener('click', () => {
+      treeNodes.forEach(n => {
+        n.classList.remove('bg-white', 'border-[#111318]', 'shadow-sm');
+        n.classList.add('border-transparent');
+      });
+      node.classList.add('bg-white', 'border-[#111318]', 'shadow-sm');
+      node.classList.remove('border-transparent');
+      document.getElementById('active-mesh-name').textContent = node.querySelector('span:nth-child(2)').textContent;
+    });
+  });
+
+  // Material Shader Sliders
+  const colorPicker = document.getElementById('slider-base-color');
+  const colorHex = document.getElementById('color-hex-val');
+  colorPicker.addEventListener('input', e => {
+    baseColor = e.target.value;
+    colorHex.textContent = baseColor;
+    drawMaterialBall();
+  });
+
+  document.querySelectorAll('.preset-color').forEach(btn => {
+    btn.addEventListener('click', () => {
+      baseColor = btn.dataset.color;
+      colorPicker.value = baseColor;
+      colorHex.textContent = baseColor;
+      drawMaterialBall();
+    });
+  });
+
+  const metallicSlider = document.getElementById('slider-metallic');
+  const metallicVal = document.getElementById('val-metallic');
+  metallicSlider.addEventListener('input', e => {
+    metallic = parseFloat(e.target.value) / 100;
+    metallicVal.textContent = metallic.toFixed(2);
+    drawMaterialBall();
+  });
+
+  const roughnessSlider = document.getElementById('slider-roughness');
+  const roughnessVal = document.getElementById('val-roughness');
+  roughnessSlider.addEventListener('input', e => {
+    roughness = parseFloat(e.target.value) / 100;
+    roughnessVal.textContent = roughness.toFixed(2);
+    drawMaterialBall();
+  });
+
+  const emissionSlider = document.getElementById('slider-emission');
+  const emissionVal = document.getElementById('val-emission');
+  emissionSlider.addEventListener('input', e => {
+    emission = parseFloat(e.target.value) / 100;
+    emissionVal.textContent = emission.toFixed(2);
+  });
+
+  drawMaterialBall();
+});
+</script>
+<script>(function initAssetBrowserModal() { const modal = document.getElementById('asset-browser-modal'); const openBtn = document.getElementById('btn-open-asset-browser'); const miniOpenBtn = document.getElementById('mini-open-assets'); const closeBtn = document.getElementById('btn-close-asset-browser'); const confirmBtn = document.getElementById('btn-confirm-browser'); const tabGh = document.getElementById('tab-source-gh'); const tabLocal = document.getElementById('tab-source-local'); function showModal() { if (modal) modal.classList.remove('hidden'); } function hideModal() { if (modal) modal.classList.add('hidden'); } if (openBtn) openBtn.addEventListener('click', showModal); if (miniOpenBtn) miniOpenBtn.addEventListener('click', showModal); if (closeBtn) closeBtn.addEventListener('click', hideModal); if (confirmBtn) confirmBtn.addEventListener('click', hideModal); if (modal) { modal.addEventListener('click', (e) => { if (e.target === modal) hideModal(); }); } window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) { hideModal(); } }); if (tabGh && tabLocal) { tabGh.addEventListener('click', () => { tabGh.classList.add('bg-white', 'text-black', 'shadow-sm'); tabGh.classList.remove('text-on-surface-variant'); tabLocal.classList.remove('bg-white', 'text-black', 'shadow-sm'); tabLocal.classList.add('text-on-surface-variant'); }); tabLocal.addEventListener('click', () => { tabLocal.classList.add('bg-white', 'text-black', 'shadow-sm'); tabLocal.classList.remove('text-on-surface-variant'); tabGh.classList.remove('bg-white', 'text-black', 'shadow-sm'); tabGh.classList.add('text-on-surface-variant'); }); } })();</script></body></html>
