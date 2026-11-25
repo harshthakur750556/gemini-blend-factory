@@ -2,21 +2,32 @@ import 'dotenv/config';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import express, { type Request, type Response } from 'express';
-import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import {
   buildGitHubPagesUrl,
   buildGitHubReleaseUrl,
+  buildModelSubfolderPaths,
+  normalizeWorkspacePath,
+  sanitizeModelSlug,
   validateGithubSlug,
+  validateModelSlug,
   validateReleaseAsset,
+  validateScreenshotFilename,
+  validateTextureFilename,
 } from './src/utils/pathSafety.ts';
-import { MAX_MODEL_UPLOAD_BYTES, validateModelUpload } from './src/utils/modelUploadValidation.ts';
+import {
+  MAX_MODEL_UPLOAD_BYTES,
+  VIEWABLE_3D_EXTENSIONS,
+  validateModelUpload,
+} from './src/utils/modelUploadValidation.ts';
 
 const PORT = Number(process.env.PORT || 3000);
 const MODEL_ID = 'gemini-4-hydrogen';
 const WORKSPACE_ROOT = path.resolve(process.cwd());
+const MAX_SCREENSHOT_BYTES = 6 * 1024 * 1024; // 6 MB per screenshot
 
 const app = express();
-app.use(express.json({ limit: '18mb' }));
+app.use(express.json({ limit: '28mb' }));
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -69,76 +80,96 @@ function githubHeaders(token: string, accept = 'application/vnd.github+json'): R
   };
 }
 
-const STUDIO_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
-  {
-    name: 'build_blend_cloud',
-    description:
-      'Commits a complete Blender 4.2 LTS Python modeling script to scripts/build.py in Cloud GitHub CI (or routes to Local Blender Backup if active), runs headless Blender to generate model.blend, model.glb, and Cycles preview.png, and triggers automated Gemini Vision inspection.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        bpy_script: {
-          type: Type.STRING,
-          description:
-            'Complete standalone Blender 4.2 LTS Python script using bmesh, modifiers, and Principled BSDF. Must start with bpy.ops.wm.read_factory_settings(use_empty=True) and omit save/export/render calls.',
-        },
-        commit_note: {
-          type: Type.STRING,
-          description: 'Concise git commit note describing the 3D asset or visual refinement pass.',
-        },
-      },
-      required: ['bpy_script', 'commit_note'],
+function decodeStrictBase64(raw: string, maxBytes: number): Buffer {
+  const cleaned = raw.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+  if (!cleaned || !/^[A-Za-z0-9+/=]+$/.test(cleaned)) {
+    throw new Error('Invalid base64 payload.');
+  }
+  const buf = Buffer.from(cleaned, 'base64');
+  if (buf.length === 0 || buf.length > maxBytes) {
+    throw new Error(`Decoded binary size is empty or exceeds ${Math.round(maxBytes / (1024 * 1024))}MB.`);
+  }
+  return buf;
+}
+
+/**
+ * Commits or updates a single file in GitHub via the Contents API.
+ */
+async function commitGithubFile(
+  gh: GitHubEnv,
+  repoPath: string,
+  contentBase64: string,
+  commitMessage: string
+): Promise<{ sha: string; htmlUrl: string | null; path: string }> {
+  const safePath = normalizeWorkspacePath(repoPath);
+  const encodedPath = safePath
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+  const endpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodedPath}`;
+
+  let existingSha: string | undefined;
+  const getRes = await fetch(`${endpoint}?ref=${encodeURIComponent(gh.branch)}`, {
+    headers: githubHeaders(gh.token),
+  });
+  if (getRes.ok) {
+    const existing = (await getRes.json()) as { sha?: string };
+    existingSha = existing.sha;
+  }
+
+  const putRes = await fetch(endpoint, {
+    method: 'PUT',
+    headers: {
+      ...githubHeaders(gh.token),
+      'Content-Type': 'application/json',
     },
-  },
-  {
-    name: 'read_local_file',
-    description:
-      'Reads a text file from the user’s linked local PC workspace folder using a relative POSIX path (e.g. "scripts/build.py" or "README.md").',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        path: {
-          type: Type.STRING,
-          description: 'Relative POSIX path inside the linked local folder.',
-        },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'write_local_file',
-    description:
-      'Proposes writing or updating a file in the user’s linked local PC workspace folder. The UI displays a line-by-line diff card and waits for explicit user approval before writing to disk.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        path: {
-          type: Type.STRING,
-          description: 'Relative POSIX path inside the linked local folder.',
-        },
-        content: {
-          type: Type.STRING,
-          description: 'Complete new UTF-8 file contents.',
-        },
-      },
-      required: ['path', 'content'],
-    },
-  },
-  {
-    name: 'list_local_files',
-    description:
-      'Lists files available in the user’s linked local PC workspace folder (or starter repository files if no local folder is linked).',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        subdir: {
-          type: Type.STRING,
-          description: 'Optional relative subdirectory prefix to filter results (e.g. "scripts").',
-        },
-      },
-    },
-  },
-];
+    body: JSON.stringify({
+      message: commitMessage.slice(0, 140),
+      content: contentBase64,
+      branch: gh.branch,
+      ...(existingSha ? { sha: existingSha } : {}),
+    }),
+  });
+
+  if (!putRes.ok) {
+    const errText = await putRes.text();
+    throw new Error(`GitHub write failed for ${safePath} (${putRes.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const putJson = (await putRes.json()) as {
+    content?: { path?: string; html_url?: string };
+    commit?: { sha?: string; html_url?: string };
+  };
+  return {
+    sha: putJson.commit?.sha || '',
+    htmlUrl: putJson.content?.html_url || putJson.commit?.html_url || null,
+    path: putJson.content?.path || safePath,
+  };
+}
+
+function guessMimeFromPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.glb')) return 'model/gltf-binary';
+  if (lower.endsWith('.gltf')) return 'model/gltf+json';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.json')) return 'application/json;charset=utf-8';
+  if (lower.endsWith('.dae') || lower.endsWith('.3mf')) return 'application/xml;charset=utf-8';
+  if (
+    lower.endsWith('.obj') ||
+    lower.endsWith('.py') ||
+    lower.endsWith('.fbx') ||
+    lower.endsWith('.usda') ||
+    lower.endsWith('.step') ||
+    lower.endsWith('.stp') ||
+    lower.endsWith('.dxf') ||
+    lower.endsWith('.off')
+  ) {
+    return 'text/plain;charset=utf-8';
+  }
+  return 'application/octet-stream';
+}
 
 // 1. Safe server configuration summary (no secrets ever returned)
 app.get('/api/config', (_req: Request, res: Response) => {
@@ -154,7 +185,7 @@ app.get('/api/config', (_req: Request, res: Response) => {
   });
 });
 
-// 2. Starter repository files for the Left Workspace Pane before linking a local folder
+// 2. Starter repository files fallback (when GitHub secrets are not yet set)
 const STARTER_REPO_PATHS = [
   'scripts/build.py',
   'scripts/export_and_render.py',
@@ -173,7 +204,7 @@ app.get('/api/workspace/starter', async (_req: Request, res: Response) => {
         const content = await fs.readFile(resolved, 'utf8');
         files.push({ path: rel, content, size: Buffer.byteLength(content, 'utf8') });
       } catch {
-        // Skip if file does not exist
+        // Skip missing files
       }
     }
     res.json({ files });
@@ -182,14 +213,199 @@ app.get('/api/workspace/starter', async (_req: Request, res: Response) => {
   }
 });
 
-// 3. GitHub CI status & latest release metadata
+// 3. Full GitHub Workspace Sync: Recursive repository file tree
+app.get('/api/github/tree', async (_req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.json({ configured: false, files: [] });
+    return;
+  }
+
+  try {
+    const treeUrl = `https://api.github.com/repos/${gh.owner}/${gh.repo}/git/trees/${encodeURIComponent(gh.branch)}?recursive=1`;
+    const treeRes = await fetch(treeUrl, { headers: githubHeaders(gh.token) });
+    if (!treeRes.ok) {
+      res.status(treeRes.status).json({
+        configured: true,
+        files: [],
+        error: `Failed to fetch GitHub tree (${treeRes.status}).`,
+      });
+      return;
+    }
+
+    const treeJson = (await treeRes.json()) as {
+      tree?: Array<{ path?: string; type?: string; size?: number; sha?: string }>;
+    };
+
+    const files = (treeJson.tree || [])
+      .filter((item) => item.type === 'blob' && typeof item.path === 'string')
+      .filter((item) => !item.path!.startsWith('node_modules/') && !item.path!.startsWith('dist/'))
+      .slice(0, 400)
+      .map((item) => ({
+        path: item.path!,
+        name: item.path!.split('/').pop() || item.path!,
+        size: item.size || 0,
+        sha: item.sha || '',
+        source: 'github' as const,
+      }));
+
+    res.json({
+      configured: true,
+      owner: gh.owner,
+      repo: gh.repo,
+      branch: gh.branch,
+      files,
+    });
+  } catch (err) {
+    res.status(502).json({
+      configured: true,
+      files: [],
+      error: err instanceof Error ? err.message : 'Unable to sync GitHub repository tree.',
+    });
+  }
+});
+
+// 3b. Read any text file from GitHub Workspace
+app.get('/api/github/file', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository is not configured.' });
+    return;
+  }
+
+  const rawPath = typeof req.query.path === 'string' ? req.query.path : '';
+  let safePath: string;
+  try {
+    safePath = normalizeWorkspacePath(rawPath);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid path.' });
+    return;
+  }
+
+  try {
+    const encodedPath = safePath.split('/').map(encodeURIComponent).join('/');
+    const endpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodedPath}?ref=${encodeURIComponent(gh.branch)}`;
+    const fileRes = await fetch(endpoint, { headers: githubHeaders(gh.token) });
+    if (!fileRes.ok) {
+      res.status(fileRes.status).json({ error: `File ${safePath} not found in GitHub.` });
+      return;
+    }
+    const json = (await fileRes.json()) as {
+      content?: string;
+      encoding?: string;
+      sha?: string;
+      size?: number;
+      html_url?: string;
+    };
+    const decoded =
+      json.encoding === 'base64' && typeof json.content === 'string'
+        ? Buffer.from(json.content.replace(/\s+/g, ''), 'base64').toString('utf8')
+        : '';
+
+    res.json({
+      path: safePath,
+      sha: json.sha || '',
+      size: json.size || decoded.length,
+      htmlUrl: json.html_url || null,
+      content: decoded,
+    });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to read GitHub file.' });
+  }
+});
+
+// 3c. Commit/save any text file directly back to GitHub Workspace
+app.put('/api/github/file', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository is not configured.' });
+    return;
+  }
+
+  const { path: rawPath, content, commitMessage } = req.body as {
+    path?: unknown;
+    content?: unknown;
+    commitMessage?: unknown;
+  };
+  if (typeof rawPath !== 'string' || typeof content !== 'string' || content.length > 500_000) {
+    res.status(400).json({ error: 'Valid path and UTF-8 content under 500KB are required.' });
+    return;
+  }
+
+  let safePath: string;
+  try {
+    safePath = normalizeWorkspacePath(rawPath);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid file path.' });
+    return;
+  }
+
+  try {
+    const note =
+      typeof commitMessage === 'string' && commitMessage.trim()
+        ? commitMessage.trim()
+        : `Update ${safePath} from BlendFactory Studio`;
+    const result = await commitGithubFile(
+      gh,
+      safePath,
+      Buffer.from(content, 'utf8').toString('base64'),
+      note
+    );
+    res.json({ committed: true, ...result });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to commit file to GitHub.' });
+  }
+});
+
+// 3d. Proxy raw binary/image/json asset strictly under models/<...> from GitHub
+app.get('/api/github/raw', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(404).json({ error: 'GitHub repository is not configured.' });
+    return;
+  }
+
+  const rawPath = typeof req.query.path === 'string' ? req.query.path : '';
+  let safePath: string;
+  try {
+    safePath = normalizeWorkspacePath(rawPath);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid asset path.' });
+    return;
+  }
+
+  if (!safePath.startsWith('models/')) {
+    res.status(403).json({ error: 'Raw proxy access is restricted to models/ asset folders.' });
+    return;
+  }
+
+  try {
+    const encodedPath = safePath.split('/').map(encodeURIComponent).join('/');
+    const endpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodedPath}?ref=${encodeURIComponent(gh.branch)}`;
+    const fileRes = await fetch(endpoint, {
+      headers: githubHeaders(gh.token, 'application/vnd.github.raw+json'),
+    });
+    if (!fileRes.ok) {
+      res.status(fileRes.status).json({ error: `Asset ${safePath} not found.` });
+      return;
+    }
+    const buf = Buffer.from(await fileRes.arrayBuffer());
+    res.setHeader('Content-Type', guessMimeFromPath(safePath));
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to fetch asset.' });
+  }
+});
+
+// 4. GitHub CI status & latest release metadata
 app.get('/api/github/status', async (_req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
     res.json({
       configured: false,
       state: 'unconfigured',
-      message: 'Configure GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO in Settings > Secrets to run Cloud GitHub CI.',
+      message: 'Configure GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO in Settings > Secrets to sync with GitHub.',
       pagesUrl: null,
       latestReleaseUrl: null,
       latestRun: null,
@@ -237,13 +453,11 @@ app.get('/api/github/status', async (_req: Request, res: Response) => {
       const relJson = (await releaseRes.json()) as {
         assets?: Array<{ name: string; size: number; updated_at: string }>;
       };
-      assets = (relJson.assets || [])
-        .filter((a) => validateReleaseAsset(a.name))
-        .map((a) => ({
-          name: a.name,
-          size: a.size,
-          updatedAt: a.updated_at,
-        }));
+      assets = (relJson.assets || []).map((a) => ({
+        name: a.name,
+        size: a.size,
+        updatedAt: a.updated_at,
+      }));
     }
 
     let state: 'idle' | 'building' | 'success' | 'failed' = 'idle';
@@ -277,18 +491,21 @@ app.get('/api/github/status', async (_req: Request, res: Response) => {
   }
 });
 
-// 4. Commit scripts/build.py to GitHub repository via Contents API
+// 5. Commit scripts/build.py to GitHub repository via Contents API
 app.post('/api/cloud/commit', async (req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
     res.status(400).json({
-      error:
-        'Cloud GitHub CI is not configured yet. Add GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO in Settings > Secrets.',
+      error: 'Cloud GitHub CI is not configured yet. Add GITHUB_TOKEN, GITHUB_OWNER, and GITHUB_REPO in Settings > Secrets.',
     });
     return;
   }
 
-  const { bpy_script, commit_note } = req.body as { bpy_script?: unknown; commit_note?: unknown };
+  const { bpy_script, commit_note, model_slug } = req.body as {
+    bpy_script?: unknown;
+    commit_note?: unknown;
+    model_slug?: unknown;
+  };
   if (typeof bpy_script !== 'string' || !bpy_script.trim() || bpy_script.length > 250_000) {
     res.status(400).json({ error: 'bpy_script must be a non-empty Python script under 250KB.' });
     return;
@@ -299,47 +516,19 @@ app.post('/api/cloud/commit', async (req: Request, res: Response) => {
       : 'Update scripts/build.py from BlendFactory Studio';
 
   try {
-    const contentEndpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/scripts/build.py`;
-    let existingSha: string | undefined;
+    const encoded = Buffer.from(bpy_script, 'utf8').toString('base64');
+    const result = await commitGithubFile(gh, 'scripts/build.py', encoded, safeNote);
 
-    const getRes = await fetch(`${contentEndpoint}?ref=${encodeURIComponent(gh.branch)}`, {
-      headers: githubHeaders(gh.token),
-    });
-    if (getRes.ok) {
-      const existing = (await getRes.json()) as { sha?: string };
-      existingSha = existing.sha;
+    // Also mirror the source build.py into the model's dedicated subfolder if a slug is provided
+    if (typeof model_slug === 'string' && model_slug.trim()) {
+      const paths = buildModelSubfolderPaths(model_slug);
+      await commitGithubFile(gh, paths.buildPy, encoded, `Archive ${paths.buildPy} — ${safeNote}`).catch(() => {});
     }
-
-    const putRes = await fetch(contentEndpoint, {
-      method: 'PUT',
-      headers: {
-        ...githubHeaders(gh.token),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: safeNote,
-        content: Buffer.from(bpy_script, 'utf8').toString('base64'),
-        branch: gh.branch,
-        ...(existingSha ? { sha: existingSha } : {}),
-      }),
-    });
-
-    if (!putRes.ok) {
-      const errBody = await putRes.text();
-      res.status(putRes.status).json({
-        error: `GitHub commit failed (${putRes.status}): ${errBody.slice(0, 240)}`,
-      });
-      return;
-    }
-
-    const putJson = (await putRes.json()) as {
-      commit?: { sha?: string; html_url?: string };
-    };
 
     res.json({
       committed: true,
-      commitSha: putJson.commit?.sha || '',
-      commitUrl: putJson.commit?.html_url || null,
+      commitSha: result.sha,
+      commitUrl: result.htmlUrl,
       branch: gh.branch,
       startedAt: new Date().toISOString(),
       pagesUrl: gh.pagesUrl,
@@ -351,7 +540,7 @@ app.post('/api/cloud/commit', async (req: Request, res: Response) => {
   }
 });
 
-// 5. Poll GitHub Actions run for committed SHA
+// 6. Poll GitHub Actions run for committed SHA
 app.get('/api/cloud/poll', async (req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
@@ -381,18 +570,10 @@ app.get('/api/cloud/poll', async (req: Request, res: Response) => {
     };
 
     const runs = runsJson.workflow_runs || [];
-    const matched = commitSha
-      ? runs.find((r) => r.head_sha === commitSha) || runs[0]
-      : runs[0];
+    const matched = commitSha ? runs.find((r) => r.head_sha === commitSha) || runs[0] : runs[0];
 
     if (!matched) {
-      res.json({
-        found: false,
-        status: 'queued',
-        conclusion: null,
-        runId: null,
-        htmlUrl: null,
-      });
+      res.json({ found: false, status: 'queued', conclusion: null, runId: null, htmlUrl: null });
       return;
     }
 
@@ -411,11 +592,22 @@ app.get('/api/cloud/poll', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Proxy latest GitHub Release artifacts (model.glb, preview.png, model.blend)
+// 7. Proxy latest GitHub Release artifacts (model.glb, preview.png, model.blend, hero/front/side/top.png, manifest.json)
+const EXTENDED_RELEASE_ASSETS = new Set([
+  'model.glb',
+  'preview.png',
+  'model.blend',
+  'hero.png',
+  'front.png',
+  'side.png',
+  'top.png',
+  'manifest.json',
+]);
+
 app.get('/api/github/artifacts/:asset', async (req: Request, res: Response) => {
   const rawAsset = req.params.asset;
   const assetName = Array.isArray(rawAsset) ? rawAsset[0] : rawAsset;
-  if (!assetName || !validateReleaseAsset(assetName)) {
+  if (!assetName || (!validateReleaseAsset(assetName) && !EXTENDED_RELEASE_ASSETS.has(assetName))) {
     res.status(400).json({ error: 'Invalid artifact requested.' });
     return;
   }
@@ -437,7 +629,7 @@ app.get('/api/github/artifacts/:asset', async (req: Request, res: Response) => {
     }
 
     const relJson = (await releaseRes.json()) as {
-      assets?: Array<{ name: string; url: string; browser_download_url: string }>;
+      assets?: Array<{ name: string; url: string }>;
     };
     const asset = (relJson.assets || []).find((a) => a.name === assetName);
     if (!asset) {
@@ -455,14 +647,7 @@ app.get('/api/github/artifacts/:asset', async (req: Request, res: Response) => {
     }
 
     const arrayBuffer = await fileRes.arrayBuffer();
-    const contentType =
-      assetName === 'preview.png'
-        ? 'image/png'
-        : assetName === 'model.glb'
-          ? 'model/gltf-binary'
-          : 'application/octet-stream';
-
-    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Type', guessMimeFromPath(assetName));
     res.setHeader('Cache-Control', 'no-store');
     if (assetName === 'model.blend') {
       res.setHeader('Content-Disposition', 'attachment; filename="model.blend"');
@@ -475,7 +660,7 @@ app.get('/api/github/artifacts/:asset', async (req: Request, res: Response) => {
   }
 });
 
-// 6b. List available 3D models from GitHub latest release + repo models/ directory
+// 8. List organized 3D model bundles from GitHub `models/<slug>/...` + latest CI release
 app.get('/api/github/models', async (_req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
@@ -484,85 +669,205 @@ app.get('/api/github/models', async (_req: Request, res: Response) => {
   }
 
   try {
-    const [releaseRes, contentsRes] = await Promise.all([
+    const [releaseRes, treeRes] = await Promise.all([
       fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}/releases/tags/latest`, {
         headers: githubHeaders(gh.token),
       }),
       fetch(
-        `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/models?ref=${encodeURIComponent(gh.branch)}`,
+        `https://api.github.com/repos/${gh.owner}/${gh.repo}/git/trees/${encodeURIComponent(gh.branch)}?recursive=1`,
         { headers: githubHeaders(gh.token) }
       ),
     ]);
 
-    const models: Array<{
-      id: string;
-      name: string;
-      source: 'github-release' | 'github-repo';
-      format: string;
-      sizeBytes?: number;
-      url?: string;
-      htmlUrl?: string;
-      viewable: boolean;
-      updatedAt?: string;
-    }> = [];
+    const models: Array<Record<string, unknown>> = [];
 
+    // Latest rolling release model.glb + its Cycles multi-angle screenshots
     if (releaseRes.ok) {
       const relJson = (await releaseRes.json()) as {
         html_url?: string;
         assets?: Array<{ name: string; size: number; updated_at: string }>;
       };
-      for (const a of relJson.assets || []) {
-        if (a.name === 'model.glb') {
-          models.push({
-            id: `gh-release:${a.name}`,
-            name: 'Latest CI Build (model.glb)',
-            source: 'github-release',
-            format: '.glb',
+      const releaseAssets = relJson.assets || [];
+      const glbAsset = releaseAssets.find((a) => a.name === 'model.glb');
+      if (glbAsset) {
+        const shots = releaseAssets
+          .filter((a) => ['preview.png', 'hero.png', 'front.png', 'side.png', 'top.png'].includes(a.name))
+          .map((a) => ({
+            name: a.name,
+            path: `release/${a.name}`,
+            url: `/api/github/artifacts/${encodeURIComponent(a.name)}`,
             sizeBytes: a.size,
-            url: '/api/github/artifacts/model.glb',
-            htmlUrl: relJson.html_url || gh.latestReleaseUrl || undefined,
-            viewable: true,
-            updatedAt: a.updated_at,
-          });
-        }
+            kind: 'screenshot',
+          }));
+
+        models.push({
+          id: 'gh-release:model.glb',
+          slug: 'latest-ci-build',
+          name: 'Latest CI Build (model.glb)',
+          source: 'github-release',
+          format: '.glb',
+          group: 'Cloud_CI',
+          sizeBytes: glbAsset.size,
+          url: '/api/github/artifacts/model.glb',
+          htmlUrl: relJson.html_url || gh.latestReleaseUrl || undefined,
+          screenshots: shots,
+          textures: [],
+          viewable: true,
+          updatedAt: glbAsset.updated_at,
+          description: 'Headless Blender 4.2 LTS Cycles CI build with rolling release artifacts.',
+        });
       }
     }
 
-    if (contentsRes.ok) {
-      const list = (await contentsRes.json()) as Array<{
-        type?: string;
-        name?: string;
-        size?: number;
-        path?: string;
-        html_url?: string;
-      }>;
-      if (Array.isArray(list)) {
-        for (const item of list) {
-          if (item.type !== 'file' || !item.name) continue;
-          const lower = item.name.toLowerCase();
-          const ext = lower.endsWith('.glb')
-            ? '.glb'
-            : lower.endsWith('.gltf')
-              ? '.gltf'
-              : lower.endsWith('.obj')
-                ? '.obj'
-                : lower.endsWith('.stl')
-                  ? '.stl'
-                  : lower.endsWith('.blend')
-                    ? '.blend'
-                    : null;
-          if (!ext) continue;
-          const check = validateModelUpload(item.name, Math.max(1, item.size || 1));
-          if (!check.valid || !check.sanitizedName) continue;
+    // Parse organized `models/<slug>/...` folders & any legacy top-level `models/<file>`
+    if (treeRes.ok) {
+      const treeJson = (await treeRes.json()) as {
+        tree?: Array<{ path?: string; type?: string; size?: number }>;
+      };
+      const blobs = (treeJson.tree || []).filter(
+        (t) => t.type === 'blob' && typeof t.path === 'string' && t.path.startsWith('models/')
+      );
+
+      interface FolderBucket {
+        slug: string;
+        primaryFile?: { name: string; path: string; ext: string; size: number };
+        buildPyPath?: string;
+        manifestPath?: string;
+        textures: Array<{ name: string; path: string; url: string; sizeBytes?: number; kind: 'texture' }>;
+        screenshots: Array<{ name: string; path: string; url: string; sizeBytes?: number; kind: 'screenshot' }>;
+      }
+
+      const buckets = new Map<string, FolderBucket>();
+
+      for (const blob of blobs) {
+        const fullPath = blob.path!;
+        const parts = fullPath.split('/');
+        // Legacy flat file: models/foo.glb
+        if (parts.length === 2) {
+          const fname = parts[1];
+          const check = validateModelUpload(fname, Math.max(1, blob.size || 1));
+          if (!check.valid || !check.sanitizedName || !check.extension) continue;
+          const slug = sanitizeModelSlug(fname);
           models.push({
-            id: `gh-repo:${check.sanitizedName}`,
-            name: item.name,
+            id: `gh-repo:${fullPath}`,
+            slug,
+            name: fname,
             source: 'github-repo',
-            format: ext,
-            sizeBytes: item.size,
-            url: `/api/github/repo-model/${encodeURIComponent(check.sanitizedName)}`,
-            htmlUrl: item.html_url,
-            viewable: ext === '.glb' || ext === '.gltf' || ext === '.obj' || ext === '.stl',
+            format: check.extension,
+            group: 'Props',
+            sizeBytes: blob.size,
+            url: `/api/github/raw?path=${encodeURIComponent(fullPath)}`,
+            repoFolderPath: 'models',
+            textures: [],
+            screenshots: [],
+            viewable: VIEWABLE_3D_EXTENSIONS.has(check.extension),
+          });
+          continue;
+        }
+
+        // Structured subfolder: models/<slug>/...
+        const slug = parts[1];
+        if (!validateModelSlug(slug)) continue;
+        let bucket = buckets.get(slug);
+        if (!bucket) {
+          bucket = { slug, textures: [], screenshots: [] };
+          buckets.set(slug, bucket);
+        }
+
+        const fileName = parts[parts.length - 1];
+        const rawUrl = `/api/github/raw?path=${encodeURIComponent(fullPath)}`;
+
+        if (parts.length === 3 && fileName === 'manifest.json') {
+          bucket.manifestPath = fullPath;
+        } else if (parts.length === 3 && fileName === 'build.py') {
+          bucket.buildPyPath = fullPath;
+        } else if (parts[2] === 'textures' && validateTextureFilename(fileName)) {
+          bucket.textures.push({
+            name: fileName,
+            path: fullPath,
+            url: rawUrl,
+            sizeBytes: blob.size,
+            kind: 'texture',
+          });
+        } else if (parts[2] === 'screenshots' && validateScreenshotFilename(fileName)) {
+          bucket.screenshots.push({
+            name: fileName,
+            path: fullPath,
+            url: rawUrl,
+            sizeBytes: blob.size,
+            kind: 'screenshot',
+          });
+        } else if (parts.length === 3) {
+          const check = validateModelUpload(fileName, Math.max(1, blob.size || 1));
+          if (check.valid && check.extension) {
+            // Prefer .glb as primary viewable mesh if multiple formats exist in the folder
+            if (!bucket.primaryFile || check.extension === '.glb') {
+              bucket.primaryFile = {
+                name: fileName,
+                path: fullPath,
+                ext: check.extension,
+                size: blob.size || 0,
+              };
+            }
+          }
+        }
+      }
+
+      // Enrich each folder bucket with optional manifest.json metadata
+      for (const bucket of buckets.values()) {
+        let displayName = bucket.slug
+          .split(/[-_]/)
+          .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+          .join(' ');
+        let group = 'Architecture';
+        let description = `GitHub folder models/${bucket.slug}/ (${bucket.textures.length} textures · ${bucket.screenshots.length} screenshots)`;
+        let updatedAt: string | undefined;
+
+        if (bucket.manifestPath) {
+          try {
+            const encoded = bucket.manifestPath.split('/').map(encodeURIComponent).join('/');
+            const mRes = await fetch(
+              `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encoded}?ref=${encodeURIComponent(gh.branch)}`,
+              { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
+            );
+            if (mRes.ok) {
+              const mJson = (await mRes.json()) as {
+                name?: string;
+                group?: string;
+                description?: string;
+                updatedAt?: string;
+              };
+              if (mJson.name) displayName = mJson.name;
+              if (mJson.group) group = mJson.group;
+              if (mJson.description) description = mJson.description;
+              if (mJson.updatedAt) updatedAt = mJson.updatedAt;
+            }
+          } catch {
+            // Fallback to folder defaults
+          }
+        }
+
+        if (bucket.primaryFile || bucket.buildPyPath) {
+          models.push({
+            id: `gh-bundle:${bucket.slug}`,
+            slug: bucket.slug,
+            name: displayName,
+            source: 'github-repo',
+            format: bucket.primaryFile?.ext || '.glb',
+            group,
+            sizeBytes: bucket.primaryFile?.size,
+            url: bucket.primaryFile
+              ? `/api/github/raw?path=${encodeURIComponent(bucket.primaryFile.path)}`
+              : undefined,
+            repoFolderPath: `models/${bucket.slug}`,
+            buildPyPath: bucket.buildPyPath,
+            textures: bucket.textures,
+            screenshots: bucket.screenshots,
+            viewable: Boolean(
+              bucket.primaryFile && VIEWABLE_3D_EXTENSIONS.has(bucket.primaryFile.ext)
+            ),
+            updatedAt,
+            description,
           });
         }
       }
@@ -578,143 +883,205 @@ app.get('/api/github/models', async (_req: Request, res: Response) => {
   }
 });
 
-// 6c. Proxy a custom 3D model stored in models/<filename> on GitHub
-app.get('/api/github/repo-model/:filename', async (req: Request, res: Response) => {
+// 9. Default Organized Save: Save a complete 3D model bundle into GitHub `models/<slug>/`
+app.post('/api/github/save-model-bundle', async (req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
-    res.status(404).json({ error: 'GitHub repository is not configured.' });
+    res.status(400).json({ error: 'GitHub repository secrets are not configured.' });
     return;
   }
 
-  const rawName = req.params.filename;
-  const filename = Array.isArray(rawName) ? rawName[0] : rawName;
-  const check = validateModelUpload(filename || '', 1);
-  if (!check.valid || !check.sanitizedName || check.sanitizedName !== filename) {
-    res.status(400).json({ error: 'Invalid model filename.' });
-    return;
-  }
-
-  try {
-    const endpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/models/${encodeURIComponent(check.sanitizedName)}?ref=${encodeURIComponent(gh.branch)}`;
-    const fileRes = await fetch(endpoint, {
-      headers: githubHeaders(gh.token, 'application/vnd.github.raw+json'),
-    });
-    if (!fileRes.ok) {
-      res.status(fileRes.status).json({ error: `Model ${check.sanitizedName} not found in repo.` });
-      return;
-    }
-
-    const buf = Buffer.from(await fileRes.arrayBuffer());
-    const contentType =
-      check.extension === '.glb'
-        ? 'model/gltf-binary'
-        : check.extension === '.gltf'
-          ? 'model/gltf+json'
-          : check.extension === '.obj'
-            ? 'text/plain;charset=utf-8'
-            : 'application/octet-stream';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'no-store');
-    res.send(buf);
-  } catch (err) {
-    res.status(502).json({
-      error: err instanceof Error ? err.message : 'Failed to proxy repository model.',
-    });
-  }
-});
-
-// 6d. Upload a custom 3D model (.glb, .gltf, .blend) to GitHub repo under models/<sanitizedName>
-app.post('/api/github/upload-model', async (req: Request, res: Response) => {
-  const gh = getGitHubEnv();
-  if (!gh.configured) {
-    res.status(400).json({
-      error: 'GitHub repository secrets are not configured.',
-    });
-    return;
-  }
-
-  const { fileName, contentBase64, commitMessage } = req.body as {
+  const {
+    modelSlug,
+    displayName,
+    group,
+    fileName,
+    modelBase64,
+    buildPy,
+    textures,
+    screenshots,
+    metadata,
+    commitMessage,
+  } = req.body as {
+    modelSlug?: unknown;
+    displayName?: unknown;
+    group?: unknown;
     fileName?: unknown;
-    contentBase64?: unknown;
+    modelBase64?: unknown;
+    buildPy?: unknown;
+    textures?: unknown;
+    screenshots?: unknown;
+    metadata?: unknown;
     commitMessage?: unknown;
   };
 
-  if (typeof fileName !== 'string' || typeof contentBase64 !== 'string' || !contentBase64.trim()) {
-    res.status(400).json({ error: 'fileName and base64 content are required.' });
+  if (typeof fileName !== 'string' || typeof modelBase64 !== 'string') {
+    res.status(400).json({ error: 'fileName and modelBase64 are required.' });
     return;
   }
 
-  const cleanedBase64 = contentBase64.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/=]+$/.test(cleanedBase64)) {
-    res.status(400).json({ error: 'Invalid base64 payload.' });
+  let decodedModel: Buffer;
+  try {
+    decodedModel = decodeStrictBase64(modelBase64, MAX_MODEL_UPLOAD_BYTES);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid model binary.' });
     return;
   }
 
-  const decoded = Buffer.from(cleanedBase64, 'base64');
-  if (decoded.length === 0 || decoded.length > MAX_MODEL_UPLOAD_BYTES) {
-    res.status(400).json({ error: 'Model binary size is empty or exceeds the 12MB limit.' });
-    return;
-  }
-
-  const check = validateModelUpload(fileName, decoded.length);
+  const check = validateModelUpload(fileName, decodedModel.length);
   if (!check.valid || !check.sanitizedName) {
     res.status(400).json({ error: check.reason || 'Invalid model filename.' });
     return;
   }
 
-  const repoPath = `models/${check.sanitizedName}`;
+  const slug = sanitizeModelSlug(typeof modelSlug === 'string' && modelSlug.trim() ? modelSlug : check.sanitizedName);
+  const paths = buildModelSubfolderPaths(slug);
   const safeMsg =
     typeof commitMessage === 'string' && commitMessage.trim()
-      ? commitMessage.trim().slice(0, 140)
-      : `Upload 3D model ${check.sanitizedName} from BlendFactory Studio`;
+      ? commitMessage.trim().slice(0, 120)
+      : `Save ${slug} asset bundle to ${paths.folder}/`;
 
   try {
-    const contentEndpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${repoPath}`;
-    let existingSha: string | undefined;
+    const modelRepoPath = `${paths.folder}/${check.sanitizedName}`;
+    const mainCommit = await commitGithubFile(
+      gh,
+      modelRepoPath,
+      decodedModel.toString('base64'),
+      safeMsg
+    );
 
-    const existingRes = await fetch(`${contentEndpoint}?ref=${encodeURIComponent(gh.branch)}`, {
-      headers: githubHeaders(gh.token),
-    });
-    if (existingRes.ok) {
-      const existingJson = (await existingRes.json()) as { sha?: string };
-      existingSha = existingJson.sha;
+    const savedTextures: string[] = [];
+    if (Array.isArray(textures)) {
+      for (const tex of textures.slice(0, 12)) {
+        if (!tex || typeof tex.name !== 'string' || typeof tex.contentBase64 !== 'string') continue;
+        if (!validateTextureFilename(tex.name)) continue;
+        const buf = decodeStrictBase64(tex.contentBase64, MAX_SCREENSHOT_BYTES);
+        const texPath = `${paths.texturesDir}/${tex.name}`;
+        await commitGithubFile(gh, texPath, buf.toString('base64'), `Add texture ${tex.name} for ${slug}`);
+        savedTextures.push(texPath);
+      }
     }
 
-    const putRes = await fetch(contentEndpoint, {
-      method: 'PUT',
-      headers: {
-        ...githubHeaders(gh.token),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: safeMsg,
-        content: decoded.toString('base64'),
-        branch: gh.branch,
-        ...(existingSha ? { sha: existingSha } : {}),
-      }),
-    });
+    const savedScreenshots: string[] = [];
+    if (Array.isArray(screenshots)) {
+      for (const shot of screenshots.slice(0, 8)) {
+        if (!shot || typeof shot.name !== 'string' || typeof shot.contentBase64 !== 'string') continue;
+        if (!validateScreenshotFilename(shot.name)) continue;
+        const buf = decodeStrictBase64(shot.contentBase64, MAX_SCREENSHOT_BYTES);
+        const shotPath = `${paths.screenshotsDir}/${shot.name}`;
+        await commitGithubFile(gh, shotPath, buf.toString('base64'), `Add screenshot ${shot.name} for ${slug}`);
+        savedScreenshots.push(shotPath);
+      }
+    }
 
-    if (!putRes.ok) {
-      const errBody = await putRes.text();
-      res.status(putRes.status).json({
-        error: `GitHub model upload failed (${putRes.status}): ${errBody.slice(0, 220)}`,
-      });
+    if (typeof buildPy === 'string' && buildPy.trim()) {
+      await commitGithubFile(
+        gh,
+        paths.buildPy,
+        Buffer.from(buildPy, 'utf8').toString('base64'),
+        `Save Blender script for ${slug}`
+      );
+    }
+
+    const manifestObj = {
+      slug,
+      name: typeof displayName === 'string' && displayName.trim() ? displayName.trim().slice(0, 80) : slug,
+      group: typeof group === 'string' && group.trim() ? group.trim().slice(0, 40) : 'Architecture',
+      primaryFile: check.sanitizedName,
+      format: check.extension,
+      sizeBytes: decodedModel.length,
+      textures: savedTextures,
+      screenshots: savedScreenshots,
+      updatedAt: new Date().toISOString(),
+      ...(metadata && typeof metadata === 'object' ? { telemetry: metadata } : {}),
+    };
+
+    await commitGithubFile(
+      gh,
+      paths.manifest,
+      Buffer.from(JSON.stringify(manifestObj, null, 2), 'utf8').toString('base64'),
+      `Update manifest for ${slug}`
+    );
+
+    res.json({
+      saved: true,
+      slug,
+      folder: paths.folder,
+      modelPath: modelRepoPath,
+      commitSha: mainCommit.sha,
+      htmlUrl: mainCommit.htmlUrl,
+      proxyUrl: `/api/github/raw?path=${encodeURIComponent(modelRepoPath)}`,
+      texturesCount: savedTextures.length,
+      screenshotsCount: savedScreenshots.length,
+    });
+  } catch (err) {
+    res.status(502).json({
+      error: err instanceof Error ? err.message : 'Failed to save model bundle to GitHub.',
+    });
+  }
+});
+
+// 9b. Backward-compatible upload endpoint (now stores neatly inside models/<slug>/)
+app.post('/api/github/upload-model', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository secrets are not configured.' });
+    return;
+  }
+
+  const { fileName, contentBase64, commitMessage, group } = req.body as {
+    fileName?: unknown;
+    contentBase64?: unknown;
+    commitMessage?: unknown;
+    group?: unknown;
+  };
+  if (typeof fileName !== 'string' || typeof contentBase64 !== 'string') {
+    res.status(400).json({ error: 'fileName and base64 content are required.' });
+    return;
+  }
+
+  try {
+    const decoded = decodeStrictBase64(contentBase64, MAX_MODEL_UPLOAD_BYTES);
+    const check = validateModelUpload(fileName, decoded.length);
+    if (!check.valid || !check.sanitizedName) {
+      res.status(400).json({ error: check.reason || 'Invalid model filename.' });
       return;
     }
 
-    const putJson = (await putRes.json()) as {
-      content?: { path?: string; html_url?: string };
-      commit?: { sha?: string; html_url?: string };
+    const slug = sanitizeModelSlug(check.sanitizedName);
+    const paths = buildModelSubfolderPaths(slug);
+    const repoPath = `${paths.folder}/${check.sanitizedName}`;
+    const safeMsg =
+      typeof commitMessage === 'string' && commitMessage.trim()
+        ? commitMessage.trim().slice(0, 140)
+        : `Upload 3D model ${check.sanitizedName} into ${paths.folder}/`;
+
+    const result = await commitGithubFile(gh, repoPath, decoded.toString('base64'), safeMsg);
+
+    const manifestObj = {
+      slug,
+      name: check.sanitizedName.replace(/\.[^.]+$/, ''),
+      group: typeof group === 'string' && group.trim() ? group.trim() : 'Props',
+      primaryFile: check.sanitizedName,
+      format: check.extension,
+      sizeBytes: decoded.length,
+      updatedAt: new Date().toISOString(),
     };
+    await commitGithubFile(
+      gh,
+      paths.manifest,
+      Buffer.from(JSON.stringify(manifestObj, null, 2), 'utf8').toString('base64'),
+      `Update manifest for ${slug}`
+    );
 
     res.json({
       uploaded: true,
+      slug,
       fileName: check.sanitizedName,
-      path: putJson.content?.path || repoPath,
-      commitSha: putJson.commit?.sha || '',
-      htmlUrl: putJson.content?.html_url || putJson.commit?.html_url || null,
-      proxyUrl: `/api/github/repo-model/${encodeURIComponent(check.sanitizedName)}`,
+      path: result.path,
+      commitSha: result.sha,
+      htmlUrl: result.htmlUrl,
+      proxyUrl: `/api/github/raw?path=${encodeURIComponent(repoPath)}`,
     });
   } catch (err) {
     res.status(502).json({
@@ -723,107 +1090,270 @@ app.post('/api/github/upload-model', async (req: Request, res: Response) => {
   }
 });
 
-// 7. Gemini Function Calling Chat Endpoint
-app.post('/api/chat', async (req: Request, res: Response) => {
-  const ai = getGeminiClient();
-  if (!ai) {
-    res.status(503).json({
-      error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
-    });
+// 10. REAL-TIME AI HARNESS PROTOCOL ENDPOINTS
+// 10a. Harness submits a new or reformed Blender 4.2 build.py for a specific model slug
+app.post('/api/harness/submit', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository secrets must be configured for Harness CI.' });
     return;
   }
 
-  const { contents, systemSkill, mode, localFiles, currentBuildPy } = req.body as {
-    contents?: unknown;
-    systemSkill?: unknown;
-    mode?: unknown;
-    localFiles?: unknown;
-    currentBuildPy?: unknown;
+  const { modelSlug, displayName, group, bpyScript, commitNote } = req.body as {
+    modelSlug?: unknown;
+    displayName?: unknown;
+    group?: unknown;
+    bpyScript?: unknown;
+    commitNote?: unknown;
   };
 
-  if (!Array.isArray(contents) || contents.length === 0) {
-    res.status(400).json({ error: 'contents must be a non-empty array of conversation turns.' });
+  if (typeof bpyScript !== 'string' || !bpyScript.trim() || bpyScript.length > 250_000) {
+    res.status(400).json({ error: 'bpyScript must be a non-empty Blender 4.2 Python script.' });
     return;
   }
 
-  const skillText = typeof systemSkill === 'string' && systemSkill.trim() ? systemSkill.trim() : '';
-  const filesList = Array.isArray(localFiles)
-    ? localFiles.filter((f): f is string => typeof f === 'string').slice(0, 120)
-    : [];
-  const activeMode = mode === 'local' ? 'Local Blender Backup' : 'Cloud GitHub CI [Primary]';
-
-  const systemInstruction = [
-    skillText,
-    '',
-    `Active Execution Mode: ${activeMode}`,
-    `Visible Workspace Files (${filesList.length}): ${filesList.length ? filesList.join(', ') : 'None linked yet'}`,
-    typeof currentBuildPy === 'string' && currentBuildPy.trim()
-      ? `Current scripts/build.py length: ${currentBuildPy.length} chars.`
-      : '',
-    'When asked to build or modify a 3D model, invoke build_blend_cloud with a complete, valid Blender 4.2 LTS script.',
-    'When asked to inspect or edit files in the user’s local folder, invoke list_local_files, read_local_file, or write_local_file.',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const slug = sanitizeModelSlug(typeof modelSlug === 'string' ? modelSlug : 'harness-model');
+  const paths = buildModelSubfolderPaths(slug);
+  const note =
+    typeof commitNote === 'string' && commitNote.trim()
+      ? commitNote.trim().slice(0, 140)
+      : `[Harness] Build/reform ${slug}`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: MODEL_ID,
-      contents: contents as Parameters<typeof ai.models.generateContent>[0]['contents'],
-      config: {
-        systemInstruction,
-        tools: [{ functionDeclarations: STUDIO_FUNCTION_DECLARATIONS }],
-      },
-    });
+    const scriptB64 = Buffer.from(bpyScript, 'utf8').toString('base64');
+    await commitGithubFile(gh, paths.buildPy, scriptB64, `Archive ${paths.buildPy} — ${note}`);
 
-    const modelContent = response.candidates?.[0]?.content ?? null;
-    const functionCalls = (response.functionCalls || []).map((fc) => ({
-      id: fc.id,
-      name: fc.name,
-      args: fc.args || {},
-    }));
+    const manifestObj = {
+      slug,
+      name: typeof displayName === 'string' && displayName.trim() ? displayName.trim() : slug,
+      group: typeof group === 'string' && group.trim() ? group.trim() : 'Architecture',
+      buildPy: paths.buildPy,
+      updatedAt: new Date().toISOString(),
+      source: 'ai-harness',
+    };
+    await commitGithubFile(
+      gh,
+      paths.manifest,
+      Buffer.from(JSON.stringify(manifestObj, null, 2), 'utf8').toString('base64'),
+      `Update harness manifest for ${slug}`
+    );
+
+    const ciCommit = await commitGithubFile(gh, 'scripts/build.py', scriptB64, note);
 
     res.json({
-      text: response.text ?? '',
-      functionCalls,
-      modelContent,
+      submitted: true,
+      modelSlug: slug,
+      folder: paths.folder,
+      commitSha: ciCommit.sha,
+      pollUrl: `/api/cloud/poll?commitSha=${encodeURIComponent(ciCommit.sha)}`,
+      inspectUrl: `/api/harness/models/${encodeURIComponent(slug)}`,
+      screenshotsUrl: `/api/harness/models/${encodeURIComponent(slug)}/screenshots`,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Gemini API call failed.';
-    res.status(502).json({ error: message });
+    res.status(502).json({
+      error: err instanceof Error ? err.message : 'Harness submission failed.',
+    });
   }
 });
 
-// 8. Autonomous Gemini Vision Critique + Pass 2 Script Generator
+// 10b. Harness inspects a model's stored screenshots, manifest, GLB, and build.py so it can reform in real time
+app.get('/api/harness/models/:slug', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository is not configured.' });
+    return;
+  }
+
+  const rawSlug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+  const slug = sanitizeModelSlug(rawSlug || '');
+  if (!validateModelSlug(slug)) {
+    res.status(400).json({ error: 'Invalid model slug.' });
+    return;
+  }
+
+  const includeBase64 = req.query.includeBase64 === '1';
+
+  try {
+    const treeUrl = `https://api.github.com/repos/${gh.owner}/${gh.repo}/git/trees/${encodeURIComponent(gh.branch)}?recursive=1`;
+    const treeRes = await fetch(treeUrl, { headers: githubHeaders(gh.token) });
+    if (!treeRes.ok) {
+      res.status(treeRes.status).json({ error: 'Unable to inspect repository tree.' });
+      return;
+    }
+
+    const prefix = `models/${slug}/`;
+    const treeJson = (await treeRes.json()) as {
+      tree?: Array<{ path?: string; type?: string; size?: number }>;
+    };
+    const matching = (treeJson.tree || []).filter(
+      (i) => i.type === 'blob' && typeof i.path === 'string' && i.path.startsWith(prefix)
+    );
+
+    const screenshots: Array<{ name: string; path: string; url: string; base64?: string }> = [];
+    const textures: Array<{ name: string; path: string; url: string }> = [];
+    let modelUrl: string | null = null;
+    let buildPy: string | null = null;
+    let manifest: Record<string, unknown> | null = null;
+
+    for (const item of matching) {
+      const p = item.path!;
+      const fname = p.split('/').pop() || '';
+      const rawProxy = `/api/github/raw?path=${encodeURIComponent(p)}`;
+
+      if (p.startsWith(`${prefix}screenshots/`) && validateScreenshotFilename(fname)) {
+        const entry: { name: string; path: string; url: string; base64?: string } = {
+          name: fname,
+          path: p,
+          url: rawProxy,
+        };
+        if (includeBase64 && screenshots.length < 6) {
+          const encoded = p.split('/').map(encodeURIComponent).join('/');
+          const imgRes = await fetch(
+            `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encoded}?ref=${encodeURIComponent(gh.branch)}`,
+            { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
+          );
+          if (imgRes.ok) {
+            entry.base64 = Buffer.from(await imgRes.arrayBuffer()).toString('base64');
+          }
+        }
+        screenshots.push(entry);
+      } else if (p.startsWith(`${prefix}textures/`) && validateTextureFilename(fname)) {
+        textures.push({ name: fname, path: p, url: rawProxy });
+      } else if (p === `${prefix}manifest.json`) {
+        const encoded = p.split('/').map(encodeURIComponent).join('/');
+        const mRes = await fetch(
+          `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encoded}?ref=${encodeURIComponent(gh.branch)}`,
+          { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
+        );
+        if (mRes.ok) manifest = (await mRes.json()) as Record<string, unknown>;
+      } else if (p === `${prefix}build.py`) {
+        const encoded = p.split('/').map(encodeURIComponent).join('/');
+        const bRes = await fetch(
+          `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encoded}?ref=${encodeURIComponent(gh.branch)}`,
+          { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
+        );
+        if (bRes.ok) buildPy = await bRes.text();
+      } else if (fname.toLowerCase().endsWith('.glb') || !modelUrl) {
+        modelUrl = rawProxy;
+      }
+    }
+
+    res.json({
+      slug,
+      folder: `models/${slug}`,
+      modelUrl,
+      manifest,
+      buildPy,
+      textures,
+      screenshots,
+    });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to inspect harness model.' });
+  }
+});
+
+// 10c. Store captured multi-angle screenshots directly inside `models/<slug>/screenshots/`
+app.post('/api/harness/models/:slug/screenshots', async (req: Request, res: Response) => {
+  const gh = getGitHubEnv();
+  if (!gh.configured) {
+    res.status(400).json({ error: 'GitHub repository is not configured.' });
+    return;
+  }
+
+  const rawSlug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+  const slug = sanitizeModelSlug(rawSlug || '');
+  if (!validateModelSlug(slug)) {
+    res.status(400).json({ error: 'Invalid model slug.' });
+    return;
+  }
+
+  const { screenshots } = req.body as {
+    screenshots?: Array<{ name?: unknown; contentBase64?: unknown }>;
+  };
+  if (!Array.isArray(screenshots) || screenshots.length === 0) {
+    res.status(400).json({ error: 'Provide at least one screenshot { name, contentBase64 }.' });
+    return;
+  }
+
+  const paths = buildModelSubfolderPaths(slug);
+  const uploaded: Array<{ name: string; path: string; url: string }> = [];
+
+  try {
+    for (const shot of screenshots.slice(0, 8)) {
+      if (typeof shot.name !== 'string' || typeof shot.contentBase64 !== 'string') continue;
+      if (!validateScreenshotFilename(shot.name)) continue;
+      const buf = decodeStrictBase64(shot.contentBase64, MAX_SCREENSHOT_BYTES);
+      const repoPath = `${paths.screenshotsDir}/${shot.name}`;
+      await commitGithubFile(
+        gh,
+        repoPath,
+        buf.toString('base64'),
+        `Store viewport screenshot ${shot.name} for ${slug}`
+      );
+      uploaded.push({
+        name: shot.name,
+        path: repoPath,
+        url: `/api/github/raw?path=${encodeURIComponent(repoPath)}`,
+      });
+    }
+
+    res.json({ uploaded: true, slug, count: uploaded.length, screenshots: uploaded });
+  } catch (err) {
+    res.status(502).json({
+      error: err instanceof Error ? err.message : 'Failed to upload screenshots to GitHub.',
+    });
+  }
+});
+
+// 11. Real Multi-Angle Gemini Vision QA Critique + Pass 2 Script Reformer
 app.post('/api/vision/critique', async (req: Request, res: Response) => {
   const ai = getGeminiClient();
   if (!ai) {
     res.status(503).json({
-      error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+      error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets to run real Gemini Vision QA.',
     });
     return;
   }
 
-  const { imageBase64, mimeType, bpyScript, userGoal, passNumber, systemSkill } = req.body as {
+  const { imageBase64, mimeType, images, bpyScript, userGoal, passNumber, systemSkill } = req.body as {
     imageBase64?: unknown;
     mimeType?: unknown;
+    images?: Array<{ angle?: unknown; imageBase64?: unknown; mimeType?: unknown }>;
     bpyScript?: unknown;
     userGoal?: unknown;
     passNumber?: unknown;
     systemSkill?: unknown;
   };
 
-  if (typeof imageBase64 !== 'string' || imageBase64.length < 100) {
-    res.status(400).json({ error: 'Valid base64 image data is required for Vision inspection.' });
+  const visualParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
+  if (Array.isArray(images) && images.length > 0) {
+    for (const img of images.slice(0, 4)) {
+      if (typeof img?.imageBase64 === 'string' && img.imageBase64.length > 100) {
+        const safeMime =
+          img.mimeType === 'image/jpeg' || img.mimeType === 'image/png' || img.mimeType === 'image/webp'
+            ? img.mimeType
+            : 'image/png';
+        visualParts.push({ inlineData: { mimeType: safeMime, data: img.imageBase64 } });
+      }
+    }
+  } else if (typeof imageBase64 === 'string' && imageBase64.length > 100) {
+    const safeMime =
+      mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp'
+        ? mimeType
+        : 'image/png';
+    visualParts.push({ inlineData: { mimeType: safeMime, data: imageBase64 } });
+  }
+
+  if (visualParts.length === 0) {
+    res.status(400).json({ error: 'At least one real captured screenshot or Cycles render is required for Vision QA.' });
     return;
   }
 
-  const safeMime =
-    mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp'
-      ? mimeType
-      : 'image/png';
   const scriptStr = typeof bpyScript === 'string' ? bpyScript : '';
-  const goalStr = typeof userGoal === 'string' && userGoal.trim() ? userGoal.trim() : 'Inspect the rendered 3D model for silhouette, bevel, proportion, and material defects.';
+  const goalStr =
+    typeof userGoal === 'string' && userGoal.trim()
+      ? userGoal.trim()
+      : 'Inspect these real rendered angles for geometry proportions, bevel quality, grounding, and Principled BSDF materials.';
   const passNum = typeof passNumber === 'number' && Number.isFinite(passNumber) ? passNumber : 1;
 
   try {
@@ -833,24 +1363,19 @@ app.post('/api/vision/critique', async (req: Request, res: Response) => {
         {
           role: 'user',
           parts: [
-            {
-              inlineData: {
-                mimeType: safeMime,
-                data: imageBase64,
-              },
-            },
+            ...visualParts,
             {
               text: [
-                `Inspect this Blender 4.2 LTS Cycles CPU render (Pass ${passNum}).`,
-                `User Design Goal: ${goalStr}`,
+                `Inspect these ${visualParts.length} real rendered view(s) of the 3D asset (Pass ${passNum}).`,
+                `Design Goal: ${goalStr}`,
                 '',
                 'Current scripts/build.py:',
                 '```python',
                 scriptStr.slice(0, 40000),
                 '```',
                 '',
-                'Identify concrete geometry, proportion, bevel, grounding, or Principled BSDF material defects visible in the render.',
-                'If improvements are warranted, provide a complete, drop-in refined Blender 4.2 LTS scripts/build.py for Pass 2 (no save/export/render boilerplate).',
+                'Identify concrete silhouette, proportion, bevel, grounding, or Principled BSDF material defects visible in the actual images.',
+                'Provide a complete, drop-in refined Blender 4.2 LTS scripts/build.py for the next reform pass (no save/export/render boilerplate).',
               ].join('\n'),
             },
           ],
@@ -860,52 +1385,28 @@ app.post('/api/vision/critique', async (req: Request, res: Response) => {
         systemInstruction:
           typeof systemSkill === 'string' && systemSkill.trim()
             ? systemSkill.trim()
-            : 'You are a Blender 4.2 LTS Look-Dev and Geometry QA Director.',
+            : 'You are a Principal Blender 4.2 LTS Look-Dev and Geometry QA Director.',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            summary: {
-              type: Type.STRING,
-              description: 'Concise technical assessment of the rendered model.',
-            },
-            recommendPass2: {
-              type: Type.BOOLEAN,
-              description: 'True if a refined Pass 2 build will noticeably improve visual quality.',
-            },
-            commitNote: {
-              type: Type.STRING,
-              description: 'Short git commit note for the Pass 2 refinement.',
-            },
+            summary: { type: Type.STRING },
+            recommendPass2: { type: Type.BOOLEAN },
+            commitNote: { type: Type.STRING },
             defects: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  severity: {
-                    type: Type.STRING,
-                    description: 'high, medium, or low',
-                  },
-                  area: {
-                    type: Type.STRING,
-                    description: 'Component or visual region inspected.',
-                  },
-                  finding: {
-                    type: Type.STRING,
-                    description: 'Concrete defect observed in the Cycles render.',
-                  },
-                  fix: {
-                    type: Type.STRING,
-                    description: 'Exact Blender 4.2 bmesh/modifier/material fix applied in Pass 2.',
-                  },
+                  severity: { type: Type.STRING },
+                  area: { type: Type.STRING },
+                  finding: { type: Type.STRING },
+                  fix: { type: Type.STRING },
                 },
                 required: ['severity', 'area', 'finding', 'fix'],
               },
             },
-            refinedScript: {
-              type: Type.STRING,
-              description: 'Complete refined Blender 4.2 LTS Python script for Pass 2.',
-            },
+            refinedScript: { type: Type.STRING },
           },
           required: ['summary', 'recommendPass2', 'commitNote', 'defects', 'refinedScript'],
         },

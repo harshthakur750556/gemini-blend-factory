@@ -2,9 +2,12 @@ export type AllowedReleaseAsset = 'model.glb' | 'preview.png' | 'model.blend';
 
 const ALLOWED_RELEASE_ASSETS = new Set<string>(['model.glb', 'preview.png', 'model.blend']);
 const GITHUB_SLUG_RE = /^[A-Za-z0-9_.-]{1,100}$/;
+const MODEL_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const SCREENSHOT_NAME_RE = /^[A-Za-z0-9._-]{1,80}\.(png|jpg|jpeg|webp)$/i;
+const TEXTURE_NAME_RE = /^[A-Za-z0-9._-]{1,80}\.(png|jpg|jpeg|webp|ktx2|hdr|exr)$/i;
 
 /**
- * Normalizes a relative path inside the linked local workspace and rejects any
+ * Normalizes a relative path inside the linked local or GitHub workspace and rejects any
  * traversal attempt, absolute path, null byte, or Windows drive/backslash prefix.
  */
 export function normalizeWorkspacePath(inputPath: string): string {
@@ -39,6 +42,67 @@ export function normalizeWorkspacePath(inputPath: string): string {
     throw new Error('Path resolves to workspace root rather than a file.');
   }
   return cleanSegments.join('/');
+}
+
+/**
+ * Sanitizes any human model title or filename into a safe lowercase subfolder slug
+ * used under GitHub `models/<slug>/`.
+ */
+export function sanitizeModelSlug(rawName: string): string {
+  const stem = String(rawName || '')
+    .replace(/\.[a-z0-9]+$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[_-]+|[_-]+$/g, '')
+    .slice(0, 64);
+  return stem || 'untitled-model';
+}
+
+export function validateModelSlug(slug: string): boolean {
+  return typeof slug === 'string' && MODEL_SLUG_RE.test(slug);
+}
+
+export function validateScreenshotFilename(fileName: string): boolean {
+  return (
+    typeof fileName === 'string' &&
+    !fileName.includes('/') &&
+    !fileName.includes('\\') &&
+    !fileName.includes('..') &&
+    SCREENSHOT_NAME_RE.test(fileName)
+  );
+}
+
+export function validateTextureFilename(fileName: string): boolean {
+  return (
+    typeof fileName === 'string' &&
+    !fileName.includes('/') &&
+    !fileName.includes('\\') &&
+    !fileName.includes('..') &&
+    TEXTURE_NAME_RE.test(fileName)
+  );
+}
+
+export function buildModelSubfolderPaths(rawSlug: string): {
+  slug: string;
+  folder: string;
+  modelGlb: string;
+  manifest: string;
+  buildPy: string;
+  texturesDir: string;
+  screenshotsDir: string;
+} {
+  const slug = sanitizeModelSlug(rawSlug);
+  const folder = `models/${slug}`;
+  return {
+    slug,
+    folder,
+    modelGlb: `${folder}/${slug}.glb`,
+    manifest: `${folder}/manifest.json`,
+    buildPy: `${folder}/build.py`,
+    texturesDir: `${folder}/textures`,
+    screenshotsDir: `${folder}/screenshots`,
+  };
 }
 
 /**
@@ -123,4 +187,3 @@ export function resolveStaticPagesAssetUrl(asset: string): string | null {
   if (!validateReleaseAsset(asset)) return null;
   return `./${asset}`;
 }
-

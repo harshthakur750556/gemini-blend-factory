@@ -2,9 +2,21 @@ name: Build Studio & Blender 4.2 LTS Asset to GitHub Pages
 
 on:
   workflow_dispatch:
+    inputs:
+      model_slug:
+        description: "Subfolder slug under models/<slug> to store CI artifacts & screenshots"
+        required: false
+        default: "latest-ci-build"
+      model_group:
+        description: "Model group category"
+        required: false
+        default: "Cloud_CI"
   push:
     branches:
       - main
+    paths-ignore:
+      - "models/*/screenshots/**"
+      - "models/*/manifest.json"
 
 permissions:
   contents: write
@@ -19,7 +31,7 @@ jobs:
   build-and-render:
     name: Build Studio UI & Headless Blender 4.2.16 LTS Asset
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -74,9 +86,9 @@ jobs:
             libgl1 \
             libegl1
 
-      - name: Run headless Blender build, export, and Cycles CPU preview
+      - name: Run headless Blender build, export, and 4-angle Cycles CPU preview
         run: |
-          mkdir -p outputs
+          mkdir -p outputs/screenshots
           ~/blender-cache/blender \
             --background \
             --factory-startup \
@@ -99,15 +111,25 @@ jobs:
             outputs/model.blend \
             outputs/model.glb \
             outputs/preview.png \
+            outputs/screenshots/hero.png \
+            outputs/screenshots/front.png \
+            outputs/screenshots/side.png \
+            outputs/screenshots/top.png \
+            outputs/manifest.json \
             --clobber
 
-      - name: Assemble GitHub Pages _site artifact with full Studio UI & CI outputs
+      - name: Assemble GitHub Pages _site artifact with full Studio UI, CI outputs & screenshots
         run: |
           rm -rf _site
-          mkdir -p _site
+          mkdir -p _site/screenshots
           cp -r dist/* _site/
           cp outputs/model.glb _site/model.glb
           cp outputs/preview.png _site/preview.png
+          cp outputs/manifest.json _site/manifest.json
+          cp outputs/screenshots/*.png _site/screenshots/ || true
+          if [ -d models ]; then
+            cp -r models _site/models
+          fi
           if [ -f preview/index.html ]; then
             cp preview/index.html _site/preview.html
           fi

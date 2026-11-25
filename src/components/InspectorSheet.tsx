@@ -1,27 +1,49 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  ArrowDownToLine,
   Bone,
   Box,
+  Circle,
+  Columns3,
+  Copy,
   Crosshair,
+  Cylinder,
   Eye,
   EyeOff,
+  FlipHorizontal2,
+  Globe,
+  Grid2X2,
+  Landmark,
+  Lightbulb,
   Lock,
+  Maximize2,
+  Mountain,
+  Move,
   Pause,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Scissors,
   Search,
+  ShieldCheck,
   Sliders,
   Sparkles,
+  Square,
+  Trash2,
+  Triangle,
   Unlock,
+  Waves,
   Wrench,
   X,
 } from 'lucide-react';
 import type {
   AnimationClipSummary,
   BoneControlInfo,
+  GizmoMode,
+  GizmoSpace,
   InsideOutSide,
   InspectorTabId,
   MaterialChannelInfo,
@@ -32,6 +54,8 @@ import type {
   SurfaceParams,
   TopologyDiagnostics,
   TransformInfo,
+  WorldEnvironmentPreset,
+  WorldPrimitiveKind,
 } from '../types';
 
 interface InspectorSheetProps {
@@ -58,12 +82,37 @@ interface InspectorSheetProps {
   animationPlaying: boolean;
   animationTime: number;
   animationDuration: number;
+  // World Assembly & Blender Creation Suite props
+  gizmoMode: GizmoMode;
+  gizmoSpace: GizmoSpace;
+  snapGrid: number;
+  snapRotateDeg: number;
+  worldEnvPreset: WorldEnvironmentPreset;
+  worldFogDensity: number;
+  onGizmoModeChange: (mode: GizmoMode) => void;
+  onGizmoSpaceChange: (space: GizmoSpace) => void;
+  onSnapGridChange: (snap: number) => void;
+  onSnapRotateChange: (deg: number) => void;
+  onAddPrimitive: (kind: WorldPrimitiveKind) => void;
+  onOpenLibraryToAppend: () => void;
+  onDuplicateSelected: () => void;
+  onDeleteSelected: () => void;
+  onMirrorSelected: (axis: 'x' | 'y' | 'z') => void;
+  onSnapSelectedToGround: () => void;
+  onToggleFlatShading: () => void;
+  onApplyArrayModifier: (count: number, offset: [number, number, number]) => void;
+  onApplyScatterModifier: (count: number, radius: number) => void;
+  onWorldEnvChange: (preset: WorldEnvironmentPreset, fogDensity: number) => void;
+  // Outliner / Shader / Topology / Rig callbacks
   onSelectNode: (uuid: string | null) => void;
   onToggleNodeVisibility: (uuid: string) => void;
   onToggleNodeLock: (uuid: string) => void;
   onToggleSoloNode: (uuid: string) => void;
   onShowAllNodes: () => void;
-  onTransformChange: (axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ', value: number) => void;
+  onTransformChange: (
+    axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ' | 'scaleX' | 'scaleY' | 'scaleZ',
+    value: number
+  ) => void;
   onSurfaceParamsChange: (next: SurfaceParams) => void;
   onInsideOutSideChange: (side: InsideOutSide) => void;
   onSectionCutChange: (next: SectionCutConfig) => void;
@@ -93,6 +142,32 @@ const LIGHTING_LABELS: Record<StudioLightingPreset, string> = {
   'soft-clay': 'Warm Soft Clay',
 };
 
+const PRIMITIVE_BUTTONS: Array<{
+  kind: WorldPrimitiveKind;
+  label: string;
+  icon: React.ReactNode;
+}> = [
+  { kind: 'cube', label: 'Cube', icon: <Box className="h-3.5 w-3.5" /> },
+  { kind: 'sphere', label: 'Sphere', icon: <Circle className="h-3.5 w-3.5" /> },
+  { kind: 'cylinder', label: 'Pillar', icon: <Cylinder className="h-3.5 w-3.5" /> },
+  { kind: 'cone', label: 'Cone', icon: <Triangle className="h-3.5 w-3.5" /> },
+  { kind: 'torus', label: 'Torus', icon: <Circle className="h-3.5 w-3.5" /> },
+  { kind: 'plane', label: 'Floor', icon: <Square className="h-3.5 w-3.5" /> },
+  { kind: 'arch', label: 'Arch', icon: <Landmark className="h-3.5 w-3.5" /> },
+  { kind: 'stairs', label: 'Stairs', icon: <Columns3 className="h-3.5 w-3.5" /> },
+  { kind: 'terrain', label: 'Terrain', icon: <Mountain className="h-3.5 w-3.5" /> },
+  { kind: 'water', label: 'Water', icon: <Waves className="h-3.5 w-3.5" /> },
+  { kind: 'point-light', label: 'Light', icon: <Lightbulb className="h-3.5 w-3.5" /> },
+  { kind: 'collider', label: 'UCX Box', icon: <ShieldCheck className="h-3.5 w-3.5" /> },
+];
+
+const WORLD_ENV_OPTIONS: Array<{ id: WorldEnvironmentPreset; label: string }> = [
+  { id: 'alabaster', label: 'Alabaster' },
+  { id: 'courtyard', label: 'Courtyard' },
+  { id: 'meadow', label: 'Meadow' },
+  { id: 'desert', label: 'Desert' },
+];
+
 const MaterialPreviewSphere: React.FC<{ params: SurfaceParams }> = ({ params }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -106,14 +181,12 @@ const MaterialPreviewSphere: React.FC<{ params: SurfaceParams }> = ({ params }) 
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    // Subtle warm gallery backdrop
     const bg = ctx.createLinearGradient(0, 0, 0, h);
     bg.addColorStop(0, '#F5F3EF');
     bg.addColorStop(1, '#E8E4DC');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
-    // Contact shadow
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(w * 0.5, h * 0.84, w * 0.25, h * 0.06, 0, 0, Math.PI * 2);
@@ -145,7 +218,6 @@ const MaterialPreviewSphere: React.FC<{ params: SurfaceParams }> = ({ params }) 
     ctx.fillStyle = baseGrad;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
 
-    // Metallic sheen + roughness specular lobe
     const gloss = Math.max(0.08, 1 - params.roughness);
     const specRadius = r * (0.14 + params.roughness * 0.48);
     const specGrad = ctx.createRadialGradient(
@@ -162,7 +234,6 @@ const MaterialPreviewSphere: React.FC<{ params: SurfaceParams }> = ({ params }) 
     ctx.fillStyle = specGrad;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
 
-    // Subtle emissive lift
     if (params.emission > 0.01) {
       ctx.fillStyle = params.baseColor;
       ctx.globalAlpha = Math.min(0.6, params.emission * 0.35);
@@ -207,6 +278,26 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   animationPlaying,
   animationTime,
   animationDuration,
+  gizmoMode,
+  gizmoSpace,
+  snapGrid,
+  snapRotateDeg,
+  worldEnvPreset,
+  worldFogDensity,
+  onGizmoModeChange,
+  onGizmoSpaceChange,
+  onSnapGridChange,
+  onSnapRotateChange,
+  onAddPrimitive,
+  onOpenLibraryToAppend,
+  onDuplicateSelected,
+  onDeleteSelected,
+  onMirrorSelected,
+  onSnapSelectedToGround,
+  onToggleFlatShading,
+  onApplyArrayModifier,
+  onApplyScatterModifier,
+  onWorldEnvChange,
   onSelectNode,
   onToggleNodeVisibility,
   onToggleNodeLock,
@@ -227,6 +318,12 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [nodeFilter, setNodeFilter] = useState<'all' | 'mesh' | 'bone'>('all');
+  const [arrayCount, setArrayCount] = useState(4);
+  const [arrayOffsetX, setArrayOffsetX] = useState(1.25);
+  const [arrayOffsetY, setArrayOffsetY] = useState(0);
+  const [arrayOffsetZ, setArrayOffsetZ] = useState(0);
+  const [scatterCount, setScatterCount] = useState(6);
+  const [scatterRadius, setScatterRadius] = useState(3.2);
 
   const filteredNodes = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -241,22 +338,23 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   if (!open) return null;
 
   const tabs: Array<{ id: InspectorTabId; label: string; icon: React.ReactNode }> = [
-    { id: 'outliner', label: 'Outliner', icon: <Box className="h-3.5 w-3.5" /> },
+    { id: 'outliner', label: 'Scene', icon: <Box className="h-3.5 w-3.5" /> },
+    { id: 'world', label: 'World', icon: <Globe className="h-3.5 w-3.5" /> },
     { id: 'material', label: 'Shader', icon: <Sliders className="h-3.5 w-3.5" /> },
-    { id: 'diagnostics', label: 'Topology', icon: <Activity className="h-3.5 w-3.5" /> },
+    { id: 'diagnostics', label: 'Mesh', icon: <Activity className="h-3.5 w-3.5" /> },
     { id: 'rig', label: 'Rig', icon: <Bone className="h-3.5 w-3.5" /> },
   ];
 
   return (
     <aside
-      aria-label="Scene Inspector"
-      className="atelier-surface animate-atelier-sheet fixed top-16 right-4 bottom-20 z-30 flex w-[348px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl"
+      aria-label="Scene & World Inspector"
+      className="atelier-surface animate-atelier-sheet fixed top-16 right-4 bottom-20 z-30 flex w-[364px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl"
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[#EFECE6] px-4 py-3.5">
+      <div className="flex items-center justify-between border-b border-[#EFECE6] px-4 py-3">
         <div>
           <h2 className="font-display text-[16px] font-medium tracking-[-0.01em] text-[#1C1B19]">
-            Inspector
+            Studio Inspector
           </h2>
           <p className="text-[11px] text-[#847E75]">
             {telemetry.modelName || 'Point Cloud Stage'}
@@ -272,8 +370,8 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
         </button>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="grid grid-cols-4 gap-1 border-b border-[#EFECE6] bg-[#FAF9F6] p-1.5">
+      {/* 5-Tab Navigation */}
+      <div className="grid grid-cols-5 gap-1 border-b border-[#EFECE6] bg-[#FAF9F6] p-1.5">
         {tabs.map((tab) => {
           const active = activeTab === tab.id;
           return (
@@ -281,7 +379,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               key={tab.id}
               type="button"
               onClick={() => onTabChange(tab.id)}
-              className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11.5px] font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[10.5px] font-medium transition-colors ${
                 active
                   ? 'bg-white text-[#1C1B19] shadow-[0_1px_3px_rgba(28,27,25,0.08)]'
                   : 'text-[#6E6960] hover:text-[#1C1B19]'
@@ -306,7 +404,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filter parts or bones..."
+                  placeholder="Filter parts, lights, or bones..."
                   className="w-full rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] py-1.5 pr-3 pl-8 text-[12px] text-[#1C1B19] outline-none focus:border-[#2D5A4C] focus:bg-white"
                 />
               </div>
@@ -339,7 +437,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
             </div>
 
             {/* Hierarchy Tree */}
-            <div className="max-h-56 overflow-y-auto rounded-xl border border-[#ECE8E1] bg-[#FCFBF9] p-1">
+            <div className="max-h-52 overflow-y-auto rounded-xl border border-[#ECE8E1] bg-[#FCFBF9] p-1">
               {filteredNodes.length === 0 ? (
                 <div className="px-3 py-6 text-center text-[11.5px] text-[#847E75]">
                   No matching scene nodes.
@@ -363,6 +461,8 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                       >
                         {node.type === 'Bone' ? (
                           <Bone className="h-3 w-3 shrink-0 text-[#847E75]" />
+                        ) : node.type === 'Light' ? (
+                          <Lightbulb className="h-3 w-3 shrink-0 text-[#9A6316]" />
                         ) : (
                           <Box className="h-3 w-3 shrink-0 text-[#847E75]" />
                         )}
@@ -417,7 +517,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               )}
             </div>
 
-            {/* Editable Transform */}
+            {/* Editable Transform (Position, Rotation, Scale) */}
             <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
@@ -480,11 +580,38 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                     ))}
                   </div>
                 </div>
+
+                <div>
+                  <div className="mb-1 text-[10.5px] font-medium text-[#6E6960]">Scale (×)</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(['scaleX', 'scaleY', 'scaleZ'] as const).map((axis, idx) => (
+                      <label key={axis} className="block">
+                        <span className="sr-only">{axis}</span>
+                        <div className="flex items-center rounded-lg border border-[#E2DDD4] bg-white px-2 py-1">
+                          <span className="mr-1 font-mono text-[10px] font-semibold text-[#847E75]">
+                            {['X', 'Y', 'Z'][idx]}
+                          </span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.05"
+                            value={Number(transformInfo[axis].toFixed(2))}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              if (Number.isFinite(v) && v > 0.01) onTransformChange(axis, v);
+                            }}
+                            className="w-full bg-transparent font-mono text-[11px] text-[#1C1B19] tabular-nums outline-none"
+                          />
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Scene Readout */}
-            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 text-[11.5px] space-y-2">
+            <div className="space-y-2 rounded-xl border border-[#ECE8E1] bg-white p-3.5 text-[11.5px]">
               <div className="flex items-center justify-between gap-3 text-[#5A564F]">
                 <span className="shrink-0">Lighting</span>
                 <span className="text-right font-medium text-[#1C1B19]">
@@ -507,12 +634,336 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
           </div>
         )}
 
+        {/* WORLD & GAME ASSEMBLY TAB (Blender-Inspired Creation Suite) */}
+        {activeTab === 'world' && (
+          <div className="space-y-4">
+            {/* Transform Gizmo Controls */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  Transform Gizmo (G / R / S)
+                </span>
+                <span className="font-mono text-[10.5px] text-[#2D5A4C]">
+                  {transformInfo.name}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-4 gap-1">
+                {(
+                  [
+                    { id: 'none', label: 'Off', icon: <X className="h-3.5 w-3.5" /> },
+                    { id: 'translate', label: 'Move', icon: <Move className="h-3.5 w-3.5" /> },
+                    { id: 'rotate', label: 'Rotate', icon: <RotateCw className="h-3.5 w-3.5" /> },
+                    { id: 'scale', label: 'Scale', icon: <Maximize2 className="h-3.5 w-3.5" /> },
+                  ] as const
+                ).map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => onGizmoModeChange(g.id)}
+                    className={`flex flex-col items-center gap-0.5 rounded-lg border py-1.5 text-[10.5px] font-medium transition-colors ${
+                      gizmoMode === g.id
+                        ? 'border-[#2D5A4C] bg-[#2D5A4C] text-white'
+                        : 'border-[#E5E1DA] bg-white text-[#5A564F] hover:text-[#1C1B19]'
+                    }`}
+                  >
+                    {g.icon}
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                <div className="flex items-center gap-1 rounded-lg border border-[#E5E1DA] bg-white p-1">
+                  {(['world', 'local'] as const).map((sp) => (
+                    <button
+                      key={sp}
+                      type="button"
+                      onClick={() => onGizmoSpaceChange(sp)}
+                      className={`flex-1 rounded-md py-1 text-[10.5px] font-medium capitalize transition-colors ${
+                        gizmoSpace === sp
+                          ? 'bg-[#EBF2EF] text-[#1D4438]'
+                          : 'text-[#6E6960] hover:text-[#1C1B19]'
+                      }`}
+                    >
+                      {sp}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <select
+                    value={snapGrid}
+                    onChange={(e) => onSnapGridChange(Number(e.target.value))}
+                    aria-label="Grid snap increment"
+                    className="flex-1 rounded-lg border border-[#E5E1DA] bg-white px-2 py-1.5 font-mono text-[10.5px] text-[#1C1B19] outline-none focus:border-[#2D5A4C]"
+                  >
+                    <option value={0}>Grid: Free</option>
+                    <option value={0.1}>Snap 0.1m</option>
+                    <option value={0.25}>Snap 0.25m</option>
+                    <option value={0.5}>Snap 0.5m</option>
+                    <option value={1}>Snap 1.0m</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => onSnapRotateChange(snapRotateDeg === 15 ? 0 : 15)}
+                    className={`rounded-lg border px-2 py-1.5 font-mono text-[10.5px] font-medium transition-colors ${
+                      snapRotateDeg === 15
+                        ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                        : 'border-[#E5E1DA] bg-white text-[#6E6960]'
+                    }`}
+                  >
+                    15°
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Add Mesh / World Prefabs (Shift+A style) */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  Add Mesh & World Prefabs
+                </span>
+                <button
+                  type="button"
+                  onClick={onOpenLibraryToAppend}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2D5A4C] hover:underline"
+                >
+                  <Plus className="h-3 w-3" />
+                  Kitbash Model
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {PRIMITIVE_BUTTONS.map((p) => (
+                  <button
+                    key={p.kind}
+                    type="button"
+                    onClick={() => onAddPrimitive(p.kind)}
+                    className="flex items-center gap-1.5 rounded-lg border border-[#E8E4DD] bg-[#FAF9F6] px-2.5 py-2 text-[11px] font-medium text-[#1C1B19] transition-colors hover:border-[#2D5A4C] hover:bg-[#F2F8F5]"
+                  >
+                    <span className="text-[#2D5A4C]">{p.icon}</span>
+                    <span className="truncate">{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Object & Level Dressing Ops */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2">
+              <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                Object & Assembly Ops
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={onDuplicateSelected}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] py-1.5 text-[11.5px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-white"
+                >
+                  <Copy className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={onSnapSelectedToGround}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] py-1.5 text-[11.5px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-white"
+                >
+                  <ArrowDownToLine className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                  Snap Floor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onMirrorSelected('x')}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] py-1.5 text-[11.5px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-white"
+                >
+                  <FlipHorizontal2 className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                  Mirror X
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onMirrorSelected('z')}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] py-1.5 text-[11.5px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-white"
+                >
+                  <FlipHorizontal2 className="h-3.5 w-3.5 rotate-90 text-[#2D5A4C]" />
+                  Mirror Z
+                </button>
+                <button
+                  type="button"
+                  onClick={onToggleFlatShading}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] py-1.5 text-[11.5px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-white"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                  Flat / Smooth
+                </button>
+                <button
+                  type="button"
+                  onClick={onDeleteSelected}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-[#EBD2D3] bg-[#FDF6F6] py-1.5 text-[11.5px] font-medium text-[#9E3134] hover:bg-[#FAEAEA]"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete Node
+                </button>
+              </div>
+            </div>
+
+            {/* Array Modifier & Scatter Cloner */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-3">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                <Grid2X2 className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                Array & Scatter Modifiers
+              </div>
+
+              <div className="rounded-lg border border-[#EAE5DC] bg-white p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-medium text-[#1C1B19]">
+                  <span>Linear Array Modifier</span>
+                  <span className="font-mono text-[#6E6960]">{arrayCount}× copies</span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">Count</span>
+                    <input
+                      type="number"
+                      min={2}
+                      max={16}
+                      value={arrayCount}
+                      onChange={(e) => setArrayCount(Math.max(2, Math.min(16, Number(e.target.value) || 2)))}
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">dX (m)</span>
+                    <input
+                      type="number"
+                      step="0.25"
+                      value={arrayOffsetX}
+                      onChange={(e) => setArrayOffsetX(Number(e.target.value) || 0)}
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">dY (m)</span>
+                    <input
+                      type="number"
+                      step="0.25"
+                      value={arrayOffsetY}
+                      onChange={(e) => setArrayOffsetY(Number(e.target.value) || 0)}
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">dZ (m)</span>
+                    <input
+                      type="number"
+                      step="0.25"
+                      value={arrayOffsetZ}
+                      onChange={(e) => setArrayOffsetZ(Number(e.target.value) || 0)}
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onApplyArrayModifier(arrayCount, [arrayOffsetX, arrayOffsetY, arrayOffsetZ])
+                  }
+                  className="w-full rounded-lg bg-[#2D5A4C] py-1.5 text-[11.5px] font-medium text-white hover:bg-[#22453A]"
+                >
+                  Apply Array Modifier
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-[#EAE5DC] bg-white p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-medium text-[#1C1B19]">
+                  <span>World Scatter / Instancer</span>
+                  <span className="font-mono text-[#6E6960]">
+                    {scatterCount} · {scatterRadius}m
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">Instances</span>
+                    <input
+                      type="number"
+                      min={2}
+                      max={24}
+                      value={scatterCount}
+                      onChange={(e) =>
+                        setScatterCount(Math.max(2, Math.min(24, Number(e.target.value) || 2)))
+                      }
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[9.5px] text-[#847E75]">Radius (m)</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min={1}
+                      max={10}
+                      value={scatterRadius}
+                      onChange={(e) => setScatterRadius(Math.max(1, Number(e.target.value) || 2))}
+                      className="w-full rounded border border-[#E2DDD4] px-1.5 py-1 font-mono text-[11px]"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onApplyScatterModifier(scatterCount, scatterRadius)}
+                  className="w-full rounded-lg border border-[#2D5A4C] bg-[#F2F8F5] py-1.5 text-[11.5px] font-medium text-[#1D4438] hover:bg-[#E4F0EB]"
+                >
+                  Scatter Around Stage
+                </button>
+              </div>
+            </div>
+
+            {/* World Atmosphere & Environment */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">
+              <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                World Sky & Fog
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {WORLD_ENV_OPTIONS.map((env) => (
+                  <button
+                    key={env.id}
+                    type="button"
+                    onClick={() => onWorldEnvChange(env.id, worldFogDensity)}
+                    className={`rounded-lg border py-1.5 text-[11.5px] font-medium transition-colors ${
+                      worldEnvPreset === env.id
+                        ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                        : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#5A564F] hover:text-[#1C1B19]'
+                    }`}
+                  >
+                    {env.label}
+                  </button>
+                ))}
+              </div>
+              <div>
+                <div className="mb-1 flex justify-between text-[11px]">
+                  <span className="text-[#5A564F]">Atmospheric Fog</span>
+                  <span className="font-mono text-[#1C1B19] tabular-nums">
+                    {(worldFogDensity * 1000).toFixed(0)}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={0.09}
+                  step={0.004}
+                  value={worldFogDensity}
+                  onChange={(e) => onWorldEnvChange(worldEnvPreset, parseFloat(e.target.value))}
+                  className="atelier-range w-full"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* SHADER & MATERIAL TAB */}
         {activeTab === 'material' && (
           <div className="space-y-4">
             <MaterialPreviewSphere params={surfaceParams} />
 
-            {/* Mode Toggle */}
             <div className="grid grid-cols-2 gap-1 rounded-xl border border-[#EAE6DF] bg-[#FAF9F6] p-1">
               <button
                 type="button"
@@ -538,8 +989,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </button>
             </div>
 
-            {/* Color & Swatches */}
-            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-3">
+            <div className="space-y-3 rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11.5px] font-medium text-[#1C1B19]">Base Color</span>
                 <div className="flex items-center gap-2">
@@ -586,7 +1036,6 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                 ))}
               </div>
 
-              {/* BSDF Sliders */}
               {[
                 { key: 'metallic' as const, label: 'Metallic', min: 0, max: 1, step: 0.02 },
                 { key: 'roughness' as const, label: 'Roughness', min: 0.04, max: 1, step: 0.02 },
@@ -619,7 +1068,6 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               ))}
             </div>
 
-            {/* Face Culling (Inside-Out) */}
             <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5">
               <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
                 Face Culling
@@ -642,8 +1090,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </div>
             </div>
 
-            {/* 3D Section Cut Slicer */}
-            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-3">
+            <div className="space-y-3 rounded-xl border border-[#ECE8E1] bg-white p-3.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
                   <Scissors className="h-3.5 w-3.5 text-[#2D5A4C]" />
@@ -717,7 +1164,6 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </div>
             </div>
 
-            {/* Active Material Slots */}
             <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
               <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
                 Material Slots ({materials.length})
@@ -849,8 +1295,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </button>
             </div>
 
-            {/* Animation Timeline */}
-            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-3">
+            <div className="space-y-3 rounded-xl border border-[#ECE8E1] bg-white p-3.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
                   Motion Clip
@@ -907,8 +1352,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               )}
             </div>
 
-            {/* Bone Pose Sliders */}
-            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-3">
+            <div className="space-y-3 rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
                   Pose Articulation
@@ -926,14 +1370,14 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               {bones.length === 0 ? (
                 <div className="flex items-center gap-2 text-[11.5px] text-[#847E75]">
                   <Sparkles className="h-3.5 w-3.5" />
-                  <span>Load a rigged model or the Stone Lantern to articulate joints.</span>
+                  <span>Load a rigged model to articulate skeletal joints.</span>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {bones.slice(0, 12).map((bone) => (
                     <div
                       key={bone.uuid}
-                      className="rounded-lg border border-[#EAE5DC] bg-white p-2.5 space-y-2"
+                      className="space-y-2 rounded-lg border border-[#EAE5DC] bg-white p-2.5"
                     >
                       <div className="truncate font-mono text-[11px] font-medium text-[#1C1B19]">
                         {bone.name}

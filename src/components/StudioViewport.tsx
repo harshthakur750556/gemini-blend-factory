@@ -9,9 +9,15 @@ import React, {
 } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
+import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
+import { AMFLoader } from 'three/examples/jsm/loaders/AMFLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   Camera,
@@ -27,9 +33,11 @@ import {
   LayoutGrid,
   Maximize2,
   MousePointer,
+  Move,
   Move3D,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Ruler,
   Scissors,
   Shield,
@@ -46,12 +54,21 @@ import {
   getBlenderPresetOffset,
   type BlenderCameraPreset,
 } from '../utils/cameraPresets';
+import {
+  buildArrayModifierClones,
+  buildScatterInstances,
+  createWorldPrimitive,
+} from '../utils/worldPrimitives';
+import { parseDxf3dFacesToGeometry, parseOffToGeometry } from '../utils/modelConverter';
 import type {
   AnimationClipSummary,
   BoneControlInfo,
   CameraTelemetry,
+  CapturedScreenshot,
   DragMouseMode,
   ExecutionMode,
+  GizmoMode,
+  GizmoSpace,
   InsideOutSide,
   MaterialChannelInfo,
   OutlinerNode,
@@ -63,17 +80,22 @@ import type {
   TopologyDiagnostics,
   TransformInfo,
   ViewportToolMode,
+  WorldEnvironmentPreset,
+  WorldPrimitiveKind,
 } from '../types';
 
 export interface StudioViewportHandle {
   loadStarterLantern: () => void;
   loadModelFromUrl: (url: string, displayName: string, formatHint?: string) => Promise<void>;
+  appendModelFromUrl: (url: string, displayName: string, formatHint?: string) => Promise<void>;
+  mountParsedGroup: (group: THREE.Group, displayName: string) => void;
   clearToPointCloud: () => void;
   setCameraPreset: (preset: BlenderCameraPreset) => void;
   toggleOrtho: () => void;
   zoomBy: (factor: number) => void;
   resetView: () => void;
   captureSnapshot: (download?: boolean) => string | null;
+  captureMultiAngleScreenshots: () => CapturedScreenshot[];
   getActiveModelRoot: () => THREE.Object3D | null;
   selectNode: (uuid: string | null) => void;
   toggleNodeVisibility: (uuid: string) => void;
@@ -81,9 +103,20 @@ export interface StudioViewportHandle {
   toggleSoloNode: (uuid: string) => void;
   showAllNodes: () => void;
   updateTransform: (
-    axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ',
+    axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ' | 'scaleX' | 'scaleY' | 'scaleZ',
     value: number
   ) => void;
+  // Blender World Assembly Suite
+  addWorldPrimitive: (kind: WorldPrimitiveKind) => void;
+  duplicateSelected: () => void;
+  deleteSelected: () => void;
+  mirrorSelected: (axis: 'x' | 'y' | 'z') => void;
+  snapSelectedToGround: () => void;
+  toggleSelectedFlatShading: () => void;
+  applyArrayModifier: (count: number, offset: [number, number, number]) => void;
+  applyScatterModifier: (count: number, radius: number) => void;
+  updateWorldEnvironment: (preset: WorldEnvironmentPreset, fogDensity: number) => void;
+  // Diagnostics & Rig
   recalculateNormals: () => void;
   purgeDegenerates: () => void;
   selectAnimationClip: (index: number) => void;
@@ -115,6 +148,13 @@ interface StudioViewportProps {
   sectionCut: SectionCutConfig;
   onSectionCutChange: (next: SectionCutConfig) => void;
   showSkeleton: boolean;
+  gizmoMode: GizmoMode;
+  onGizmoModeChange: (mode: GizmoMode) => void;
+  gizmoSpace: GizmoSpace;
+  snapGrid: number;
+  snapRotateDeg: number;
+  worldEnvPreset: WorldEnvironmentPreset;
+  worldFogDensity: number;
   executionMode: ExecutionMode;
   fsSupported: boolean;
   inspectorOpen: boolean;
@@ -154,6 +194,13 @@ const LIGHTING_OPTIONS: Array<{ id: StudioLightingPreset; label: string }> = [
   { id: 'high-contrast', label: 'Sculptural Rim' },
   { id: 'soft-clay', label: 'Warm Soft Clay' },
 ];
+
+const WORLD_ENV_BG: Record<WorldEnvironmentPreset, string> = {
+  alabaster: '#ECEAE4',
+  courtyard: '#E5E8EC',
+  meadow: '#E3EBE5',
+  desert: '#F1E6D6',
+};
 
 function createUvCheckerTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -210,8 +257,7 @@ function createContactShadowTexture(): THREE.CanvasTexture {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 256, 256);
   }
-  const tex = new THREE.CanvasTexture(canvas);
-  return tex;
+  return new THREE.CanvasTexture(canvas);
 }
 
 function createInfiniteFloorGrid(): THREE.Mesh {
@@ -265,6 +311,140 @@ function createInfiniteFloorGrid(): THREE.Mesh {
   return mesh;
 }
 
+async function loadObject3DFromUrl(
+  url: string,
+  displayName: string,
+  formatHint?: string
+): Promise<{ root: THREE.Object3D; animations: THREE.AnimationClip[]; dispose: () => void }> {
+  const hint = (formatHint || displayName || url).toLowerCase();
+  const makeFallbackMat = () =>
+    new THREE.MeshStandardMaterial({
+      name: 'Gallery_Stone_BSDF',
+      color: '#8D877E',
+      roughness: 0.6,
+      metalness: 0.08,
+    });
+
+  if (hint.endsWith('.obj')) {
+    const loader = new OBJLoader();
+    const obj = await loader.loadAsync(url);
+    const mat = makeFallbackMat();
+    obj.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const m = child as THREE.Mesh;
+        if (!m.material) m.material = mat;
+        if (!m.geometry.getAttribute('normal')) m.geometry.computeVertexNormals();
+      }
+    });
+    return { root: obj, animations: [], dispose: () => mat.dispose() };
+  }
+
+  if (hint.endsWith('.stl')) {
+    const loader = new STLLoader();
+    const geo = await loader.loadAsync(url);
+    geo.computeVertexNormals();
+    const mat = makeFallbackMat();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = displayName.replace(/\.stl$/i, '');
+    const grp = new THREE.Group();
+    grp.name = displayName;
+    grp.add(mesh);
+    return {
+      root: grp,
+      animations: [],
+      dispose: () => {
+        geo.dispose();
+        mat.dispose();
+      },
+    };
+  }
+
+  if (hint.endsWith('.ply')) {
+    const loader = new PLYLoader();
+    const geo = await loader.loadAsync(url);
+    geo.computeVertexNormals();
+    const hasColors = Boolean(geo.getAttribute('color'));
+    const mat = new THREE.MeshStandardMaterial({
+      name: 'PLY_BSDF',
+      color: hasColors ? '#FFFFFF' : '#8A847A',
+      vertexColors: hasColors,
+      roughness: 0.58,
+      metalness: 0.06,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = displayName.replace(/\.ply$/i, '');
+    const grp = new THREE.Group();
+    grp.name = displayName;
+    grp.add(mesh);
+    return {
+      root: grp,
+      animations: [],
+      dispose: () => {
+        geo.dispose();
+        mat.dispose();
+      },
+    };
+  }
+
+  if (hint.endsWith('.fbx')) {
+    const loader = new FBXLoader();
+    const fbx = await loader.loadAsync(url);
+    return { root: fbx, animations: fbx.animations || [], dispose: () => {} };
+  }
+
+  if (hint.endsWith('.dae')) {
+    const loader = new ColladaLoader();
+    const dae = await loader.loadAsync(url);
+    return { root: dae.scene, animations: [], dispose: () => {} };
+  }
+
+  if (hint.endsWith('.3mf')) {
+    const loader = new ThreeMFLoader();
+    const grp = await loader.loadAsync(url);
+    return { root: grp, animations: [], dispose: () => {} };
+  }
+
+  if (hint.endsWith('.amf')) {
+    const loader = new AMFLoader();
+    const grp = await loader.loadAsync(url);
+    return { root: grp, animations: [], dispose: () => {} };
+  }
+
+  if (hint.endsWith('.off') || hint.endsWith('.dxf')) {
+    const text = await (await fetch(url)).text();
+    const geo = hint.endsWith('.off') ? parseOffToGeometry(text) : parseDxf3dFacesToGeometry(text);
+    const mat = makeFallbackMat();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = displayName.replace(/\.(off|dxf)$/i, '');
+    const grp = new THREE.Group();
+    grp.name = displayName;
+    grp.add(mesh);
+    return {
+      root: grp,
+      animations: [],
+      dispose: () => {
+        geo.dispose();
+        mat.dispose();
+      },
+    };
+  }
+
+  // Default: GLB / GLTF
+  const loader = new GLTFLoader();
+  const gltf = await loader.loadAsync(url);
+  return {
+    root: gltf.scene,
+    animations: gltf.animations || [],
+    dispose: () => {
+      gltf.scene.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          (o as THREE.Mesh).geometry.dispose();
+        }
+      });
+    },
+  };
+}
+
 export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportProps>(
   (
     {
@@ -289,6 +469,13 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       sectionCut,
       onSectionCutChange,
       showSkeleton,
+      gizmoMode,
+      onGizmoModeChange,
+      gizmoSpace,
+      snapGrid,
+      snapRotateDeg,
+      worldEnvPreset,
+      worldFogDensity,
       executionMode,
       fsSupported,
       inspectorOpen,
@@ -324,13 +511,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const [captionModelName, setCaptionModelName] = useState<string>('Stone & Cedar Lantern');
     const [captionSummary, setCaptionSummary] = useState<string>('Architectural Sample');
 
-    // Refs to mutable 3D engine state
+    // Mutable 3D engine state refs
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const perspCamRef = useRef<THREE.PerspectiveCamera | null>(null);
     const orthoCamRef = useRef<THREE.OrthographicCamera | null>(null);
     const activeCamRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
     const orbitRef = useRef<OrbitControls | null>(null);
+    const transformCtrlRef = useRef<TransformControls | null>(null);
+    const transformHelperRef = useRef<THREE.Object3D | null>(null);
     const gridRef = useRef<THREE.Mesh | null>(null);
     const contactShadowRef = useRef<THREE.Mesh | null>(null);
     const keyLightRef = useRef<THREE.DirectionalLight | null>(null);
@@ -349,6 +538,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const pointsOverlayRef = useRef<THREE.Group | null>(null);
     const measureGroupRef = useRef<THREE.Group | null>(null);
     const measurePointsRef = useRef<THREE.Vector3[]>([]);
+    const primitiveCounterRef = useRef<number>(1);
 
     const originalMaterialsRef = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
     const explodeBasePosRef = useRef<Map<THREE.Mesh, THREE.Vector3>>(new Map());
@@ -378,7 +568,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const pendingOrbitTargetRef = useRef<THREE.Vector3 | null>(null);
     const activePresetNameRef = useRef<string>('Hero 3/4');
 
-    // Sync latest props into refs for RAF/event callbacks
     const propsRef = useRef({
       shadingPass,
       quadView,
@@ -392,6 +581,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       surfaceParams,
       sectionCut,
       showSkeleton,
+      gizmoMode,
+      gizmoSpace,
+      snapGrid,
+      snapRotateDeg,
       toolMode,
       dragMode,
     });
@@ -408,6 +601,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       surfaceParams,
       sectionCut,
       showSkeleton,
+      gizmoMode,
+      gizmoSpace,
+      snapGrid,
+      snapRotateDeg,
       toolMode,
       dragMode,
     };
@@ -458,6 +655,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             rotX: 0,
             rotY: 0,
             rotZ: 0,
+            scaleX: 1,
+            scaleY: 1,
+            scaleZ: 1,
           });
           return;
         }
@@ -474,6 +674,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           const isMesh = (obj as THREE.Mesh).isMesh;
           const isSkinned = (obj as THREE.SkinnedMesh).isSkinnedMesh;
           const isBone = (obj as THREE.Bone).isBone;
+          const isLight = (obj as THREE.Light).isLight;
           const isGroup = obj.type === 'Group' && obj !== root;
 
           let verts = 0;
@@ -526,11 +727,19 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             });
           }
 
-          if (isMesh || isBone || isGroup) {
+          if (isMesh || isBone || isGroup || isLight) {
             nodes.push({
               uuid: obj.uuid,
               name: obj.name || obj.type,
-              type: isSkinned ? 'SkinnedMesh' : isMesh ? 'Mesh' : isBone ? 'Bone' : 'Group',
+              type: isSkinned
+                ? 'SkinnedMesh'
+                : isMesh
+                  ? 'Mesh'
+                  : isBone
+                    ? 'Bone'
+                    : isLight
+                      ? 'Light'
+                      : 'Group',
               depth,
               visible: obj.visible,
               locked: lockedNodesRef.current.has(obj.uuid),
@@ -557,9 +766,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
         const cleanName = modelName || root.name || 'Untitled Asset';
         setCaptionModelName(cleanName);
-        setCaptionSummary(
-          `${meshCount} meshes · ${triangleCount.toLocaleString()} tris`
-        );
+        setCaptionSummary(`${meshCount} meshes · ${triangleCount.toLocaleString()} tris`);
 
         onTelemetryChange({
           modelName: cleanName,
@@ -602,6 +809,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           rotX: THREE.MathUtils.radToDeg(targetObj.rotation.x),
           rotY: THREE.MathUtils.radToDeg(targetObj.rotation.y),
           rotZ: THREE.MathUtils.radToDeg(targetObj.rotation.z),
+          scaleX: targetObj.scale.x,
+          scaleY: targetObj.scale.y,
+          scaleZ: targetObj.scale.z,
         });
       },
       [
@@ -613,6 +823,62 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         onTransformInfoChange,
       ]
     );
+
+    const registerMeshesInSubtree = useCallback((subtree: THREE.Object3D, centerRef: THREE.Vector3) => {
+      subtree.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const mesh = obj as THREE.Mesh;
+          mesh.castShadow = !isSoftwareGlRef.current;
+          mesh.receiveShadow = !isSoftwareGlRef.current;
+          if (!originalMaterialsRef.current.has(mesh)) {
+            originalMaterialsRef.current.set(mesh, mesh.material);
+          }
+          explodeBasePosRef.current.set(mesh, mesh.position.clone());
+          const mCenter = new THREE.Vector3();
+          new THREE.Box3().setFromObject(mesh).getCenter(mCenter);
+          const dir = mCenter.sub(centerRef);
+          if (dir.lengthSq() < 0.0001) dir.set(0, 1, 0);
+          dir.normalize();
+          if (dir.y < -0.25) dir.y = -0.08;
+          explodeDirRef.current.set(mesh, dir);
+        }
+        if ((obj as THREE.Bone).isBone && !initialBoneQuatsRef.current.has(obj.uuid)) {
+          initialBoneQuatsRef.current.set(obj.uuid, obj.quaternion.clone());
+        }
+      });
+    }, []);
+
+    // Sync TransformControls gizmo attachment & snap config
+    const syncTransformGizmo = useCallback(() => {
+      const tc = transformCtrlRef.current;
+      const root = activeModelRootRef.current;
+      if (!tc) return;
+      const { gizmoMode: mode, gizmoSpace: space, snapGrid: gSnap, snapRotateDeg: rSnap } =
+        propsRef.current;
+
+      if (mode === 'none' || !root) {
+        tc.detach();
+        requestRender();
+        return;
+      }
+
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+        : root;
+
+      if (lockedNodesRef.current.has(target.uuid)) {
+        tc.detach();
+        requestRender();
+        return;
+      }
+
+      tc.setMode(mode);
+      tc.setSpace(space);
+      tc.setTranslationSnap(gSnap > 0 ? gSnap : null);
+      tc.setRotationSnap(rSnap > 0 ? THREE.MathUtils.degToRad(rSnap) : null);
+      tc.attach(target);
+      requestRender();
+    }, [requestRender]);
 
     // Apply shading pass, surface override, culling, section cut, wireframe & points overlays
     const applyVisualMaterials = useCallback(() => {
@@ -671,7 +937,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         return;
       }
 
-      // Clear previous wireframe & points overlays
       if (wireframeGroupRef.current) {
         scene.remove(wireframeGroupRef.current);
         wireframeGroupRef.current.traverse((o) => {
@@ -712,10 +977,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       root.traverse((obj) => {
         if (!(obj as THREE.Mesh).isMesh) return;
         const mesh = obj as THREE.Mesh;
-        const orig = originalMaterialsRef.current.get(mesh);
-        if (!orig) return;
+        const orig = originalMaterialsRef.current.get(mesh) ?? mesh.material;
+        if (!originalMaterialsRef.current.has(mesh)) {
+          originalMaterialsRef.current.set(mesh, orig);
+        }
 
-        // Restore or build pass material
         if (pass === 'normal') {
           mesh.material = new THREE.MeshNormalMaterial({
             side: sideVal,
@@ -878,7 +1144,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         hemi.intensity = 1.1;
         renderer.toneMappingExposure = 1.06;
       } else {
-        // studio-4k default gallery lighting
         key.color.set('#FFF4E4');
         key.intensity = 2.6;
         fill.color.set('#DCE7F0');
@@ -891,7 +1156,19 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       requestRender();
     }, [requestRender]);
 
-    // Frame active model cleanly in gallery composition
+    // Apply World Environment preset & fog
+    const updateWorldEnvironment = useCallback(
+      (preset: WorldEnvironmentPreset, fogDensity: number) => {
+        const scene = sceneRef.current;
+        if (!scene) return;
+        const hex = WORLD_ENV_BG[preset] || '#ECEAE4';
+        scene.background = new THREE.Color(hex);
+        scene.fog = fogDensity > 0.0005 ? new THREE.FogExp2(hex, fogDensity) : null;
+        requestRender();
+      },
+      [requestRender]
+    );
+
     const frameModel = useCallback(
       (root: THREE.Object3D, instant = false) => {
         const box = new THREE.Box3().setFromObject(root);
@@ -940,6 +1217,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const disposeCurrentModel = useCallback(() => {
       const scene = sceneRef.current;
       if (!scene) return;
+      transformCtrlRef.current?.detach();
 
       if (activeModelRootRef.current) {
         scene.remove(activeModelRootRef.current);
@@ -993,7 +1271,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
         disposeCurrentModel();
 
-        // Hide point cloud when model is active
         if (pointCloudRef.current) {
           pointCloudRef.current.group.visible = false;
         }
@@ -1001,7 +1278,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           contactShadowRef.current.visible = true;
         }
 
-        // Normalize uploaded/loaded models to sit flush on y = 0 and fit comfortable gallery scale
         root.updateMatrixWorld(true);
         const rawBox = new THREE.Box3().setFromObject(root);
         const rawSize = new THREE.Vector3();
@@ -1010,7 +1286,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         rawBox.getCenter(rawCenter);
 
         const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z);
-        if (maxDim > 4.2 || (maxDim > 0 && maxDim < 0.35)) {
+        if (maxDim > 4.8 || (maxDim > 0 && maxDim < 0.35)) {
           const scale = 1.65 / maxDim;
           root.scale.multiplyScalar(scale);
           root.updateMatrixWorld(true);
@@ -1022,36 +1298,14 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         root.position.y -= rawBox.min.y;
         root.updateMatrixWorld(true);
 
-        // Cache original materials, explode vectors, and initial bone poses
         const modelCenter = new THREE.Vector3();
         new THREE.Box3().setFromObject(root).getCenter(modelCenter);
-
-        root.traverse((obj) => {
-          if ((obj as THREE.Mesh).isMesh) {
-            const mesh = obj as THREE.Mesh;
-            mesh.castShadow = !isSoftwareGlRef.current;
-            mesh.receiveShadow = !isSoftwareGlRef.current;
-            originalMaterialsRef.current.set(mesh, mesh.material);
-            explodeBasePosRef.current.set(mesh, mesh.position.clone());
-            const mCenter = new THREE.Vector3();
-            new THREE.Box3().setFromObject(mesh).getCenter(mCenter);
-            const dir = mCenter.sub(modelCenter);
-            if (dir.lengthSq() < 0.0001) dir.set(0, 1, 0);
-            dir.normalize();
-            // Keep lower plinth meshes grounded while lifting canopy/frame upward cleanly
-            if (dir.y < -0.25) dir.y = -0.08;
-            explodeDirRef.current.set(mesh, dir);
-          }
-          if ((obj as THREE.Bone).isBone) {
-            initialBoneQuatsRef.current.set(obj.uuid, obj.quaternion.clone());
-          }
-        });
+        registerMeshesInSubtree(root, modelCenter);
 
         scene.add(root);
         activeModelRootRef.current = root;
         activeModelDisposeRef.current = disposeFn;
 
-        // Skeleton helper if bones exist
         if (initialBoneQuatsRef.current.size > 0) {
           const helper = new THREE.SkeletonHelper(root);
           helper.visible = propsRef.current.showSkeleton;
@@ -1059,7 +1313,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           skeletonHelperRef.current = helper;
         }
 
-        // Animation mixer
         clipsRef.current = animations;
         if (animations.length > 0) {
           const mixer = new THREE.AnimationMixer(root);
@@ -1070,7 +1323,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           action.paused = true;
           activeActionRef.current = action;
           onAnimationsChange(
-            animations.map((c, idx) => ({ index: idx, name: c.name || `Clip ${idx + 1}`, duration: c.duration })),
+            animations.map((c, idx) => ({
+              index: idx,
+              name: c.name || `Clip ${idx + 1}`,
+              duration: c.duration,
+            })),
             0,
             animations[0].duration
           );
@@ -1081,6 +1338,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         frameModel(root, instantFrame);
         applyVisualMaterials();
         inspectActiveModel(displayName);
+        syncTransformGizmo();
       },
       [
         applyVisualMaterials,
@@ -1088,8 +1346,18 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         frameModel,
         inspectActiveModel,
         onAnimationsChange,
+        registerMeshesInSubtree,
+        syncTransformGizmo,
       ]
     );
+
+    const ensureWorldRoot = useCallback((): THREE.Object3D => {
+      if (activeModelRootRef.current) return activeModelRootRef.current;
+      const worldGroup = new THREE.Group();
+      worldGroup.name = 'World_Assembly';
+      mountModelObject(worldGroup, 'World Assembly', [], () => {}, true);
+      return worldGroup;
+    }, [mountModelObject]);
 
     const loadStarterLantern = useCallback(
       (instant = false) => {
@@ -1131,60 +1399,89 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       async (url: string, displayName: string, formatHint?: string) => {
         setLoadingLabel(`Loading ${displayName}...`);
         try {
-          const hint = (formatHint || displayName || url).toLowerCase();
-          if (hint.endsWith('.obj')) {
-            const loader = new OBJLoader();
-            const obj = await loader.loadAsync(url);
-            const fallbackMat = new THREE.MeshStandardMaterial({
-              name: 'Gallery_Stone_BSDF',
-              color: '#8D877E',
-              roughness: 0.62,
-              metalness: 0.08,
-            });
-            obj.traverse((child) => {
-              if ((child as THREE.Mesh).isMesh) {
-                const m = child as THREE.Mesh;
-                if (!m.material) m.material = fallbackMat;
-                if (!m.geometry.getAttribute('normal')) m.geometry.computeVertexNormals();
-              }
-            });
-            mountModelObject(obj, displayName, [], () => fallbackMat.dispose());
-          } else if (hint.endsWith('.stl')) {
-            const loader = new STLLoader();
-            const geo = await loader.loadAsync(url);
-            geo.computeVertexNormals();
-            const mat = new THREE.MeshStandardMaterial({
-              name: 'Gallery_Clay_BSDF',
-              color: '#8A847A',
-              roughness: 0.56,
-              metalness: 0.12,
-            });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.name = displayName.replace(/\.stl$/i, '');
-            const grp = new THREE.Group();
-            grp.name = displayName;
-            grp.add(mesh);
-            mountModelObject(grp, displayName, [], () => {
-              geo.dispose();
-              mat.dispose();
-            });
-          } else {
-            const loader = new GLTFLoader();
-            const gltf = await loader.loadAsync(url);
-            mountModelObject(gltf.scene, displayName, gltf.animations || [], () => {
-              gltf.scene.traverse((o) => {
-                if ((o as THREE.Mesh).isMesh) {
-                  (o as THREE.Mesh).geometry.dispose();
-                }
-              });
-            });
-          }
+          const loaded = await loadObject3DFromUrl(url, displayName, formatHint);
+          mountModelObject(loaded.root, displayName, loaded.animations, loaded.dispose);
           onNotify(`Loaded ${displayName}`);
         } finally {
           setLoadingLabel(null);
         }
       },
       [mountModelObject, onNotify]
+    );
+
+    const updateSelectionBox = useCallback(() => {
+      const scene = sceneRef.current;
+      const root = activeModelRootRef.current;
+      if (!scene) return;
+      if (selectionBoxRef.current) {
+        scene.remove(selectionBoxRef.current);
+        selectionBoxRef.current.dispose();
+        selectionBoxRef.current = null;
+      }
+      if (root && selectedNodeUuidRef.current) {
+        const found = root.getObjectByProperty('uuid', selectedNodeUuidRef.current);
+        if (found) {
+          const box = new THREE.BoxHelper(found, 0x2d5a4c);
+          scene.add(box);
+          selectionBoxRef.current = box;
+        }
+      }
+      requestRender();
+    }, [requestRender]);
+
+    const selectNode = useCallback(
+      (uuid: string | null) => {
+        selectedNodeUuidRef.current = uuid;
+        onSelectedNodeChange(uuid);
+        updateSelectionBox();
+        syncTransformGizmo();
+        inspectActiveModel(captionModelName);
+      },
+      [
+        captionModelName,
+        inspectActiveModel,
+        onSelectedNodeChange,
+        syncTransformGizmo,
+        updateSelectionBox,
+      ]
+    );
+
+    const appendModelFromUrl = useCallback(
+      async (url: string, displayName: string, formatHint?: string) => {
+        setLoadingLabel(`Appending ${displayName}...`);
+        try {
+          const worldRoot = ensureWorldRoot();
+          const loaded = await loadObject3DFromUrl(url, displayName, formatHint);
+          const wrapper = new THREE.Group();
+          wrapper.name = `${displayName.replace(/\.[^.]+$/, '')}_${primitiveCounterRef.current++}`;
+          loaded.root.updateMatrixWorld(true);
+          const rawBox = new THREE.Box3().setFromObject(loaded.root);
+          const rawSize = new THREE.Vector3();
+          const rawCenter = new THREE.Vector3();
+          rawBox.getSize(rawSize);
+          rawBox.getCenter(rawCenter);
+          const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z);
+          if (maxDim > 3.5 || (maxDim > 0 && maxDim < 0.25)) {
+            loaded.root.scale.multiplyScalar(1.3 / maxDim);
+            loaded.root.updateMatrixWorld(true);
+            rawBox.setFromObject(loaded.root);
+            rawBox.getCenter(rawCenter);
+          }
+          loaded.root.position.x -= rawCenter.x;
+          loaded.root.position.z -= rawCenter.z;
+          loaded.root.position.y -= rawBox.min.y;
+          wrapper.add(loaded.root);
+          wrapper.position.set(1.35 * ((primitiveCounterRef.current % 4) - 1), 0, 0.6);
+          worldRoot.add(wrapper);
+          registerMeshesInSubtree(wrapper, modelCenterRef.current);
+          applyVisualMaterials();
+          selectNode(wrapper.uuid);
+          onNotify(`Appended ${displayName} into World`);
+        } finally {
+          setLoadingLabel(null);
+        }
+      },
+      [applyVisualMaterials, ensureWorldRoot, onNotify, registerMeshesInSubtree, selectNode]
     );
 
     const setCameraPreset = useCallback(
@@ -1238,7 +1535,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         to.quaternion.copy(from.quaternion);
         if (nextOrtho && containerRef.current) {
           const dist = from.position.distanceTo(orbit.target);
-          const aspect = containerRef.current.clientWidth / Math.max(1, containerRef.current.clientHeight);
+          const aspect =
+            containerRef.current.clientWidth / Math.max(1, containerRef.current.clientHeight);
           const halfH = Math.tan(THREE.MathUtils.degToRad(persp.fov * 0.5)) * dist;
           ortho.left = -halfH * aspect;
           ortho.right = halfH * aspect;
@@ -1249,6 +1547,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
         activeCamRef.current = to;
         orbit.object = to;
+        if (transformCtrlRef.current) {
+          transformCtrlRef.current.camera = to;
+        }
         orbit.update();
         requestRender();
         return nextOrtho;
@@ -1267,7 +1568,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         } else {
           const offset = cam.position.clone().sub(orbit.target);
           offset.multiplyScalar(factor);
-          const len = THREE.MathUtils.clamp(offset.length(), 0.7, 24);
+          const len = THREE.MathUtils.clamp(offset.length(), 0.7, 28);
           offset.setLength(len);
           cam.position.copy(orbit.target).add(offset);
         }
@@ -1285,54 +1586,271 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       }
     }, [frameModel, setCameraPreset]);
 
-    const captureSnapshot = useCallback((download = true): string | null => {
+    const captureSnapshot = useCallback(
+      (download = true): string | null => {
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const cam = activeCamRef.current;
+        if (!renderer || !scene || !cam) return null;
+
+        const prevSelVis = selectionBoxRef.current?.visible ?? false;
+        const prevTcVis = transformHelperRef.current?.visible ?? false;
+        if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+        if (transformHelperRef.current) transformHelperRef.current.visible = false;
+
+        renderer.setScissorTest(false);
+        renderer.render(scene, cam);
+        const dataUrl = renderer.domElement.toDataURL('image/png');
+
+        if (selectionBoxRef.current) selectionBoxRef.current.visible = prevSelVis;
+        if (transformHelperRef.current) transformHelperRef.current.visible = prevTcVis;
+        renderer.render(scene, cam);
+
+        if (download) {
+          const a = document.createElement('a');
+          a.href = dataUrl;
+          a.download = `blendfactory-snapshot-${Date.now()}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          onNotify('Saved studio PNG snapshot');
+        }
+        return dataUrl;
+      },
+      [onNotify]
+    );
+
+    // Captures 4 real studio angles (Hero 3/4, Front, Side, Top) without altering the user's camera!
+    const captureMultiAngleScreenshots = useCallback((): CapturedScreenshot[] => {
       const renderer = rendererRef.current;
       const scene = sceneRef.current;
-      const cam = activeCamRef.current;
-      if (!renderer || !scene || !cam) return null;
-      renderer.setScissorTest(false);
-      renderer.render(scene, cam);
-      const dataUrl = renderer.domElement.toDataURL('image/png');
-      if (download) {
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `blendfactory-snapshot-${Date.now()}.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        onNotify('Saved studio PNG snapshot');
-      }
-      return dataUrl;
-    }, [onNotify]);
-
-    const updateSelectionBox = useCallback(() => {
-      const scene = sceneRef.current;
+      const mainCam = activeCamRef.current;
       const root = activeModelRootRef.current;
-      if (!scene) return;
-      if (selectionBoxRef.current) {
-        scene.remove(selectionBoxRef.current);
-        selectionBoxRef.current.dispose();
-        selectionBoxRef.current = null;
+      if (!renderer || !scene || !mainCam) return [];
+
+      const box = root ? new THREE.Box3().setFromObject(root) : new THREE.Box3(
+        new THREE.Vector3(-0.8, 0, -0.8),
+        new THREE.Vector3(0.8, 1.4, 0.8)
+      );
+      const center = new THREE.Vector3();
+      const size = new THREE.Vector3();
+      box.getCenter(center);
+      box.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z, 1.0);
+      const dist = maxDim * 2.25;
+
+      const w = renderer.domElement.clientWidth || 800;
+      const h = Math.max(1, renderer.domElement.clientHeight || 600);
+      const snapCam = new THREE.PerspectiveCamera(40, w / h, 0.05, 120);
+
+      const prevSelVis = selectionBoxRef.current?.visible ?? false;
+      const prevTcVis = transformHelperRef.current?.visible ?? false;
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+      if (transformHelperRef.current) transformHelperRef.current.visible = false;
+
+      const angles: Array<{
+        angle: 'hero' | 'front' | 'side' | 'top';
+        label: string;
+        preset: BlenderCameraPreset;
+      }> = [
+        { angle: 'hero', label: 'Hero 3/4', preset: 'hero' },
+        { angle: 'front', label: 'Front', preset: 'front' },
+        { angle: 'side', label: 'Side', preset: 'right' },
+        { angle: 'top', label: 'Top', preset: 'top' },
+      ];
+
+      const stamp = new Date().toISOString();
+      const results: CapturedScreenshot[] = [];
+
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, w, h);
+
+      for (const item of angles) {
+        const off = getBlenderPresetOffset(item.preset, dist);
+        snapCam.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
+        snapCam.lookAt(center);
+        snapCam.updateProjectionMatrix();
+        renderer.render(scene, snapCam);
+        results.push({
+          id: `vp-${item.angle}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          angle: item.angle,
+          label: item.label,
+          dataUrl: renderer.domElement.toDataURL('image/png'),
+          createdAt: stamp,
+          source: 'viewport',
+        });
       }
-      if (root && selectedNodeUuidRef.current) {
-        const found = root.getObjectByProperty('uuid', selectedNodeUuidRef.current);
-        if (found) {
-          const box = new THREE.BoxHelper(found, 0x2d5a4c);
-          scene.add(box);
-          selectionBoxRef.current = box;
-        }
-      }
+
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = prevSelVis;
+      if (transformHelperRef.current) transformHelperRef.current.visible = prevTcVis;
+      renderer.render(scene, mainCam);
       requestRender();
+      return results;
     }, [requestRender]);
 
-    const selectNode = useCallback(
-      (uuid: string | null) => {
-        selectedNodeUuidRef.current = uuid;
-        onSelectedNodeChange(uuid);
+    // Blender World Assembly Operations
+    const addWorldPrimitive = useCallback(
+      (kind: WorldPrimitiveKind) => {
+        const root = ensureWorldRoot();
+        const idx = primitiveCounterRef.current++;
+        const obj = createWorldPrimitive(kind, idx);
+        // Offset slightly if stage already has objects so new primitives don't stack invisibly
+        if (root.children.length > 0 && kind !== 'terrain' && kind !== 'plane' && kind !== 'water') {
+          const ring = ((idx - 1) % 6) * (Math.PI / 3);
+          obj.position.x += Math.cos(ring) * 1.15;
+          obj.position.z += Math.sin(ring) * 1.15;
+        }
+        root.add(obj);
+        registerMeshesInSubtree(obj, modelCenterRef.current);
+        applyVisualMaterials();
+        selectNode(obj.uuid);
+        onNotify(`Added ${obj.name} to World`);
+      },
+      [applyVisualMaterials, ensureWorldRoot, onNotify, registerMeshesInSubtree, selectNode]
+    );
+
+    const duplicateSelected = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root) return;
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || null
+        : null;
+      const source = target && target !== root ? target : root.children[0];
+      if (!source || !source.parent) {
+        onNotify('Select an object to duplicate');
+        return;
+      }
+      const clone = source.clone(true);
+      clone.name = `${source.name || 'Node'}_Copy_${primitiveCounterRef.current++}`;
+      clone.position.x += 0.75;
+      source.parent.add(clone);
+      registerMeshesInSubtree(clone, modelCenterRef.current);
+      applyVisualMaterials();
+      selectNode(clone.uuid);
+      onNotify(`Duplicated ${source.name}`);
+    }, [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]);
+
+    const deleteSelected = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root || !selectedNodeUuidRef.current) {
+        onNotify('Select a child object in Outliner or Viewport to delete');
+        return;
+      }
+      const target = root.getObjectByProperty('uuid', selectedNodeUuidRef.current);
+      if (!target || target === root || !target.parent) {
+        onNotify('Cannot delete root container; select a specific part');
+        return;
+      }
+      if (lockedNodesRef.current.has(target.uuid)) {
+        onNotify(`${target.name} is locked`);
+        return;
+      }
+      transformCtrlRef.current?.detach();
+      target.parent.remove(target);
+      selectNode(null);
+      applyVisualMaterials();
+      inspectActiveModel(captionModelName);
+      onNotify(`Deleted ${target.name}`);
+    }, [applyVisualMaterials, captionModelName, inspectActiveModel, onNotify, selectNode]);
+
+    const mirrorSelected = useCallback(
+      (axis: 'x' | 'y' | 'z') => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const target = selectedNodeUuidRef.current
+          ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+          : root;
+        if (axis === 'x') target.scale.x *= -1;
+        if (axis === 'y') target.scale.y *= -1;
+        if (axis === 'z') target.scale.z *= -1;
+        target.updateMatrixWorld(true);
         updateSelectionBox();
         inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Mirrored ${target.name} across ${axis.toUpperCase()}`);
       },
-      [captionModelName, inspectActiveModel, onSelectedNodeChange, updateSelectionBox]
+      [captionModelName, inspectActiveModel, onNotify, requestRender, updateSelectionBox]
+    );
+
+    const snapSelectedToGround = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root) return;
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+        : root;
+      target.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(target);
+      if (Number.isFinite(box.min.y)) {
+        target.position.y -= box.min.y;
+        target.updateMatrixWorld(true);
+        updateSelectionBox();
+        inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Snapped ${target.name} flush to Y = 0`);
+      }
+    }, [captionModelName, inspectActiveModel, onNotify, requestRender, updateSelectionBox]);
+
+    const toggleSelectedFlatShading = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root) return;
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+        : root;
+      let nextFlat = true;
+      let toggled = 0;
+      target.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          const orig = originalMaterialsRef.current.get(o as THREE.Mesh) ?? (o as THREE.Mesh).material;
+          const mats = Array.isArray(orig) ? orig : [orig];
+          for (const m of mats) {
+            const std = m as THREE.MeshStandardMaterial;
+            if (typeof std.flatShading === 'boolean') {
+              if (toggled === 0) nextFlat = !std.flatShading;
+              std.flatShading = nextFlat;
+              std.needsUpdate = true;
+              toggled += 1;
+            }
+          }
+        }
+      });
+      applyVisualMaterials();
+      onNotify(nextFlat ? 'Enabled Flat Faceted Shading' : 'Enabled Smooth Shading');
+    }, [applyVisualMaterials, onNotify]);
+
+    const applyArrayModifier = useCallback(
+      (count: number, offset: [number, number, number]) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const target = selectedNodeUuidRef.current
+          ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root.children[0]
+          : root.children[0];
+        if (!target) return;
+        const arrGroup = buildArrayModifierClones(target, count, offset);
+        root.add(arrGroup);
+        registerMeshesInSubtree(arrGroup, modelCenterRef.current);
+        applyVisualMaterials();
+        selectNode(arrGroup.uuid);
+        onNotify(`Applied ${count}× Array Modifier`);
+      },
+      [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]
+    );
+
+    const applyScatterModifier = useCallback(
+      (count: number, radius: number) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const target = selectedNodeUuidRef.current
+          ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root.children[0]
+          : root.children[0];
+        if (!target) return;
+        const scatterGrp = buildScatterInstances(target, count, radius, Date.now() % 99991);
+        root.add(scatterGrp);
+        registerMeshesInSubtree(scatterGrp, modelCenterRef.current);
+        applyVisualMaterials();
+        selectNode(scatterGrp.uuid);
+        onNotify(`Scattered ${count} instances within ${radius}m`);
+      },
+      [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]
     );
 
     // Expose imperative methods to App
@@ -1341,12 +1859,17 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       () => ({
         loadStarterLantern: () => loadStarterLantern(false),
         loadModelFromUrl,
+        appendModelFromUrl,
+        mountParsedGroup: (group: THREE.Group, displayName: string) => {
+          mountModelObject(group, displayName, [], () => {});
+        },
         clearToPointCloud,
         setCameraPreset,
         toggleOrtho,
         zoomBy,
         resetView,
         captureSnapshot,
+        captureMultiAngleScreenshots,
         getActiveModelRoot: () => activeModelRootRef.current,
         selectNode,
         toggleNodeVisibility: (uuid: string) => {
@@ -1360,6 +1883,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         toggleNodeLock: (uuid: string) => {
           if (lockedNodesRef.current.has(uuid)) lockedNodesRef.current.delete(uuid);
           else lockedNodesRef.current.add(uuid);
+          syncTransformGizmo();
           inspectActiveModel(captionModelName);
         },
         toggleSoloNode: (uuid: string) => {
@@ -1420,11 +1944,23 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           if (axis === 'rotX') target.rotation.x = THREE.MathUtils.degToRad(value);
           if (axis === 'rotY') target.rotation.y = THREE.MathUtils.degToRad(value);
           if (axis === 'rotZ') target.rotation.z = THREE.MathUtils.degToRad(value);
+          if (axis === 'scaleX') target.scale.x = value;
+          if (axis === 'scaleY') target.scale.y = value;
+          if (axis === 'scaleZ') target.scale.z = value;
           target.updateMatrixWorld(true);
           updateSelectionBox();
           applyVisualMaterials();
           inspectActiveModel(captionModelName);
         },
+        addWorldPrimitive,
+        duplicateSelected,
+        deleteSelected,
+        mirrorSelected,
+        snapSelectedToGround,
+        toggleSelectedFlatShading,
+        applyArrayModifier,
+        applyScatterModifier,
+        updateWorldEnvironment,
         recalculateNormals: () => {
           const root = activeModelRootRef.current;
           if (!root) return;
@@ -1527,13 +2063,22 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         },
       }),
       [
+        addWorldPrimitive,
+        appendModelFromUrl,
+        applyArrayModifier,
+        applyScatterModifier,
         applyVisualMaterials,
         captionModelName,
+        captureMultiAngleScreenshots,
         captureSnapshot,
         clearToPointCloud,
+        deleteSelected,
+        duplicateSelected,
         inspectActiveModel,
         loadModelFromUrl,
         loadStarterLantern,
+        mirrorSelected,
+        mountModelObject,
         onAnimationTimeChange,
         onAnimationsChange,
         onNotify,
@@ -1542,8 +2087,12 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         resetView,
         selectNode,
         setCameraPreset,
+        snapSelectedToGround,
+        syncTransformGizmo,
         toggleOrtho,
+        toggleSelectedFlatShading,
         updateSelectionBox,
+        updateWorldEnvironment,
         zoomBy,
       ]
     );
@@ -1585,12 +2134,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       scene.fog = new THREE.FogExp2('#ECEAE4', 0.036);
       sceneRef.current = scene;
 
-      // PMREM RoomEnvironment for crisp studio reflections
       const pmrem = new THREE.PMREMGenerator(renderer);
       const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
       scene.environment = envTex;
 
-      // 3-point warm/cool gallery lighting
       const hemi = new THREE.HemisphereLight('#FFFDF8', '#D4CFC5', 0.72);
       scene.add(hemi);
       hemiLightRef.current = hemi;
@@ -1602,11 +2149,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         key.shadow.mapSize.set(2048, 2048);
         key.shadow.bias = -0.0004;
         key.shadow.camera.near = 0.5;
-        key.shadow.camera.far = 18;
-        key.shadow.camera.left = -3;
-        key.shadow.camera.right = 3;
-        key.shadow.camera.top = 3;
-        key.shadow.camera.bottom = -3;
+        key.shadow.camera.far = 22;
+        key.shadow.camera.left = -5;
+        key.shadow.camera.right = 5;
+        key.shadow.camera.top = 5;
+        key.shadow.camera.bottom = -5;
       }
       scene.add(key);
       keyLightRef.current = key;
@@ -1621,7 +2168,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       scene.add(rim);
       rimLightRef.current = rim;
 
-      // Infinite floor grid + soft contact shadow
       const floorGrid = createInfiniteFloorGrid();
       floorGrid.visible = propsRef.current.showGrid;
       scene.add(floorGrid);
@@ -1641,7 +2187,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       scene.add(contactShadow);
       contactShadowRef.current = contactShadow;
 
-      // Section cut wireframe frame helper
       const clipSquarePts = [
         new THREE.Vector3(-1, -1, 0),
         new THREE.Vector3(1, -1, 0),
@@ -1656,24 +2201,21 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       scene.add(clipHelper);
       clipHelperRef.current = clipHelper;
 
-      // Measurement tape group
       const measureGrp = new THREE.Group();
       scene.add(measureGrp);
       measureGroupRef.current = measureGrp;
 
-      // Point Cloud sculptural stage (hidden while Stone Lantern is active)
       const ptArt = createPointCloudArtGroup();
       ptArt.group.visible = false;
       scene.add(ptArt.group);
       pointCloudRef.current = ptArt;
 
-      // Cameras + OrbitControls
       const aspect = container.clientWidth / Math.max(1, container.clientHeight);
-      const persp = new THREE.PerspectiveCamera(42, aspect, 0.05, 120);
+      const persp = new THREE.PerspectiveCamera(42, aspect, 0.05, 140);
       persp.position.set(1.85, 1.35, 2.1);
       perspCamRef.current = persp;
 
-      const ortho = new THREE.OrthographicCamera(-2 * aspect, 2 * aspect, 2, -2, 0.05, 120);
+      const ortho = new THREE.OrthographicCamera(-2 * aspect, 2 * aspect, 2, -2, 0.05, 140);
       ortho.position.copy(persp.position);
       orthoCamRef.current = ortho;
       activeCamRef.current = persp;
@@ -1683,10 +2225,48 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       orbit.dampingFactor = 0.08;
       orbit.maxPolarAngle = Math.PI * 0.495;
       orbit.minDistance = 0.55;
-      orbit.maxDistance = 24;
+      orbit.maxDistance = 32;
       orbit.target.set(0, 0.68, 0);
       orbit.update();
       orbitRef.current = orbit;
+
+      // Blender-style TransformControls (r176: must add transformControls.getHelper() to scene!)
+      const tc = new TransformControls(persp, renderer.domElement);
+      const tcHelper = tc.getHelper();
+      scene.add(tcHelper);
+      transformCtrlRef.current = tc;
+      transformHelperRef.current = tcHelper;
+
+      const onTcDragging = (ev: { value: unknown }) => {
+        orbit.enabled = !ev.value;
+        requestRender();
+      };
+      const onTcObjectChange = () => {
+        if (selectionBoxRef.current) selectionBoxRef.current.update();
+        if (activeModelRootRef.current) {
+          const target = selectedNodeUuidRef.current
+            ? activeModelRootRef.current.getObjectByProperty('uuid', selectedNodeUuidRef.current) ||
+              activeModelRootRef.current
+            : activeModelRootRef.current;
+          onTransformInfoChange({
+            uuid: target === activeModelRootRef.current ? null : target.uuid,
+            name: target.name || 'Object',
+            posX: target.position.x,
+            posY: target.position.y,
+            posZ: target.position.z,
+            rotX: THREE.MathUtils.radToDeg(target.rotation.x),
+            rotY: THREE.MathUtils.radToDeg(target.rotation.y),
+            rotZ: THREE.MathUtils.radToDeg(target.rotation.z),
+            scaleX: target.scale.x,
+            scaleY: target.scale.y,
+            scaleZ: target.scale.z,
+          });
+        }
+        requestRender();
+      };
+      tc.addEventListener('dragging-changed', onTcDragging);
+      tc.addEventListener('objectChange', onTcObjectChange);
+      tc.addEventListener('change', requestRender);
 
       const onOrbitChange = () => {
         requestRender();
@@ -1697,7 +2277,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       loadStarterLantern(true);
       applyLighting();
 
-      // Resize observer — immediately re-renders after setSize so canvas never flashes blank
       const handleResize = () => {
         if (
           !containerRef.current ||
@@ -1730,7 +2309,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const resizeObserver = new ResizeObserver(handleResize);
       resizeObserver.observe(container);
 
-      // Draw HiDPI 3D axis compass
       function drawCompass(cam: THREE.Camera) {
         const cvs = compassCanvasRef.current;
         if (!cvs) return;
@@ -1789,13 +2367,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         ctx.restore();
       }
 
-      // Synchronous initial frame render so first paint is immediate
       renderer.setScissorTest(false);
       renderer.setViewport(0, 0, container.clientWidth, Math.max(1, container.clientHeight));
       renderer.render(scene, persp);
       drawCompass(persp);
 
-      // Fence-sync helper for Software WebGL so browser never saturates main thread
       const afterDraw = (cb: FrameRequestCallback) => {
         if (!isSw) {
           rafIdRef.current = requestAnimationFrame(cb);
@@ -1826,7 +2402,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         rafIdRef.current = requestAnimationFrame(cb);
       };
 
-      // Quad-view auxiliary ortho cameras
       const quadFront = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
       const quadTop = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
       const quadRight = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
@@ -1846,19 +2421,16 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
         let continuous = false;
 
-        // 1. Point cloud gentle rotation when visible
         if (pointCloudRef.current?.group.visible) {
           pointCloudRef.current.update(now * 0.001);
           continuous = true;
         }
 
-        // 2. Auto-spin turntable
         if (curProps.autoSpin && activeModelRootRef.current) {
           activeModelRootRef.current.rotation.y += dt * 0.45;
           continuous = true;
         }
 
-        // 3. Smooth Exploded View damping
         const targetExplode = curProps.exploded ? 1 : 0;
         if (Math.abs(explodeFactorRef.current - targetExplode) > 0.002 && activeModelRootRef.current) {
           if (isSw || reducedMotionRef.current) {
@@ -1883,7 +2455,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           needsRenderRef.current = true;
         }
 
-        // 4. Smooth Camera Preset Transition
         if (pendingCamTargetPosRef.current && pendingOrbitTargetRef.current && cam && ctrl) {
           cam.position.x = THREE.MathUtils.damp(cam.position.x, pendingCamTargetPosRef.current.x, 9, dt);
           cam.position.y = THREE.MathUtils.damp(cam.position.y, pendingCamTargetPosRef.current.y, 9, dt);
@@ -1906,7 +2477,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           needsRenderRef.current = true;
         }
 
-        // 5. Animation Mixer
         if (mixerRef.current && animPlayingRef.current && activeActionRef.current) {
           mixerRef.current.update(dt);
           if (now - lastTelemetryPush > 120) {
@@ -1935,7 +2505,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
             renderer.setScissorTest(true);
 
-            // Top-Left: Top Ortho
             quadTop.left = -span * qAsp;
             quadTop.right = span * qAsp;
             quadTop.top = span;
@@ -1947,12 +2516,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             renderer.setScissor(0, hh, hw, h - hh);
             renderer.render(scene, quadTop);
 
-            // Top-Right: Active Perspective/Main
             renderer.setViewport(hw, hh, w - hw, h - hh);
             renderer.setScissor(hw, hh, w - hw, h - hh);
             renderer.render(scene, cam);
 
-            // Bottom-Left: Front Ortho
             quadFront.left = -span * qAsp;
             quadFront.right = span * qAsp;
             quadFront.top = span;
@@ -1964,7 +2531,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             renderer.setScissor(0, 0, hw, hh);
             renderer.render(scene, quadFront);
 
-            // Bottom-Right: Right Ortho
             quadRight.left = -span * qAsp;
             quadRight.right = span * qAsp;
             quadRight.top = span;
@@ -1989,7 +2555,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             lastTelemetryPush = now;
             const offset = cam.position.clone().sub(ctrl.target);
             const r = offset.length() || 1;
-            const pitchDeg = Math.round(THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(offset.y / r, -1, 1))));
+            const pitchDeg = Math.round(
+              THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(offset.y / r, -1, 1)))
+            );
             const yawDeg = Math.round(THREE.MathUtils.radToDeg(Math.atan2(offset.x, offset.z)));
             onCameraTelemetryChange({
               x: cam.position.x,
@@ -2015,6 +2583,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         disposed = true;
         cancelAnimationFrame(rafIdRef.current);
         resizeObserver.disconnect();
+        tc.removeEventListener('dragging-changed', onTcDragging);
+        tc.removeEventListener('objectChange', onTcObjectChange);
+        tc.removeEventListener('change', requestRender);
+        tc.dispose();
         orbit.removeEventListener('change', onOrbitChange);
         orbit.dispose();
         disposeCurrentModel();
@@ -2062,10 +2634,17 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     }, [lightingPreset, lightAngleDeg, applyLighting]);
 
     useEffect(() => {
+      syncTransformGizmo();
+    }, [gizmoMode, gizmoSpace, snapGrid, snapRotateDeg, syncTransformGizmo]);
+
+    useEffect(() => {
+      updateWorldEnvironment(worldEnvPreset, worldFogDensity);
+    }, [worldEnvPreset, worldFogDensity, updateWorldEnvironment]);
+
+    useEffect(() => {
       requestRender();
     }, [quadView, autoSpin, exploded, requestRender]);
 
-    // Sync drag mouse mode with OrbitControls
     useEffect(() => {
       const orbit = orbitRef.current;
       if (!orbit) return;
@@ -2078,17 +2657,45 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       }
     }, [dragMode]);
 
-    // Keyboard shortcuts (Numpad 1/3/7/5/0/9/2/4/6/8/Decimal + WASD/QE + H)
+    // Keyboard shortcuts: Blender Numpad + Gizmos (G/R/S) + Shift+D Duplicate + Delete + WASD/QE + H
     useEffect(() => {
       const onKeyDown = (e: KeyboardEvent) => {
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-        if (e.key === 'h' || e.key === 'H') {
+        const lower = e.key.toLowerCase();
+
+        if (lower === 'h' && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           setControlsHidden((prev) => !prev);
           return;
         }
+        if (lower === 'g' && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          onGizmoModeChange(propsRef.current.gizmoMode === 'translate' ? 'none' : 'translate');
+          return;
+        }
+        if (lower === 'r' && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          onGizmoModeChange(propsRef.current.gizmoMode === 'rotate' ? 'none' : 'rotate');
+          return;
+        }
+        if (lower === 'd' && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          duplicateSelected();
+          return;
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeUuidRef.current) {
+          e.preventDefault();
+          deleteSelected();
+          return;
+        }
+        if (lower === 's' && propsRef.current.gizmoMode !== 'none' && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          onGizmoModeChange('scale');
+          return;
+        }
+
         if (e.code === 'Numpad1') {
           e.preventDefault();
           setCameraPreset(e.ctrlKey ? 'back' : 'front');
@@ -2132,7 +2739,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           }
           orbit.update();
           requestRender();
-        } else if (['w', 'a', 's', 'd', 'q', 'e'].includes(e.key.toLowerCase()) && !e.metaKey && !e.ctrlKey) {
+        } else if (['w', 'a', 's', 'd', 'q', 'e'].includes(lower) && !e.metaKey && !e.ctrlKey) {
           const cam = activeCamRef.current;
           const orbit = orbitRef.current;
           if (!cam || !orbit) return;
@@ -2141,13 +2748,12 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           cam.getWorldDirection(forward);
           const right = new THREE.Vector3().crossVectors(forward, cam.up).normalize();
           const delta = new THREE.Vector3();
-          const k = e.key.toLowerCase();
-          if (k === 'w') delta.addScaledVector(forward, step);
-          if (k === 's') delta.addScaledVector(forward, -step);
-          if (k === 'd') delta.addScaledVector(right, step);
-          if (k === 'a') delta.addScaledVector(right, -step);
-          if (k === 'e') delta.y += step;
-          if (k === 'q') delta.y -= step;
+          if (lower === 'w') delta.addScaledVector(forward, step);
+          if (lower === 's') delta.addScaledVector(forward, -step);
+          if (lower === 'd') delta.addScaledVector(right, step);
+          if (lower === 'a') delta.addScaledVector(right, -step);
+          if (lower === 'e') delta.y += step;
+          if (lower === 'q') delta.y -= step;
           cam.position.add(delta);
           orbit.target.add(delta);
           orbit.update();
@@ -2157,7 +2763,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
-    }, [requestRender, resetView, setCameraPreset, toggleOrtho]);
+    }, [deleteSelected, duplicateSelected, onGizmoModeChange, requestRender, resetView, setCameraPreset, toggleOrtho]);
 
     // Canvas click for Raycast Select & 2-Point Measure Tape
     const handleCanvasPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -2196,8 +2802,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         if (measurePointsRef.current.length >= 2) {
           measurePointsRef.current = [];
           while (grp.children.length > 0) {
-            const c = grp.children[0];
-            grp.remove(c);
+            grp.remove(grp.children[0]);
           }
           setMeasuredDistance(null);
         }
@@ -2286,16 +2891,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           </div>
         )}
 
-        {/* Loading indicator */}
         {loadingLabel && (
           <div className="atelier-surface pointer-events-none absolute top-20 left-1/2 z-30 -translate-x-1/2 rounded-xl px-4 py-2 text-[12px] font-medium text-[#1C1B19]">
             {loadingLabel}
           </div>
         )}
 
-        {/* TOP-LEFT EDITORIAL CAPTION — Clean, unboxed gallery typography */}
+        {/* TOP-LEFT EDITORIAL CAPTION */}
         {!controlsHidden && (
-          <div className="pointer-events-none absolute top-5 left-5 z-20 max-w-[230px] select-none sm:max-w-xs sm:left-7">
+          <div className="pointer-events-none absolute top-5 left-5 z-20 max-w-[235px] select-none sm:left-7 sm:max-w-xs">
             <h1 className="font-display text-[19px] leading-tight font-medium tracking-[-0.015em] text-[#1C1B19] sm:text-[22px]">
               {captionModelName}
             </h1>
@@ -2308,7 +2912,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
                 onClick={onOpenLibrary}
                 className="text-[#2D5A4C] underline-offset-4 transition-colors hover:text-[#1C1B19] hover:underline"
               >
-                Asset Library
+                Model Library
               </button>
               <span className="text-[#CBC4B9]">·</span>
               <button
@@ -2324,7 +2928,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
         {/* MEASUREMENT OVERLAY */}
         {measuredDistance !== null && (
-          <div className="atelier-surface absolute top-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-xl px-3.5 py-2 text-[12px] animate-atelier-popover">
+          <div className="atelier-surface animate-atelier-popover absolute top-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-xl px-3.5 py-2 text-[12px]">
             <Ruler className="h-3.5 w-3.5 text-[#2D5A4C]" />
             <span className="font-mono font-semibold text-[#1C1B19] tabular-nums">
               {measuredDistance.toFixed(3)} m
@@ -2419,8 +3023,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             Show Controls
           </button>
         ) : (
-          <div className="fixed bottom-4 left-1/2 z-20 -translate-x-1/2 max-w-[calc(100vw-1.5rem)]">
-            {/* Popover Menus anchored neatly above dock */}
+          <div className="fixed bottom-4 left-1/2 z-20 max-w-[calc(100vw-1.5rem)] -translate-x-1/2">
             {openPopover === 'shading' && (
               <div className="atelier-surface animate-atelier-popover absolute bottom-14 left-1/2 w-64 -translate-x-1/2 rounded-2xl p-2.5">
                 <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[0.04em] text-[#847E75] uppercase">
@@ -2599,10 +3202,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
                 </div>
 
                 <div className="border-t border-[#EFECE6] pt-2 text-[10.5px] leading-relaxed text-[#847E75]">
-                  Shortcuts: <span className="font-mono text-[#5A564F]">Numpad 1/3/7/5/0</span> ·{' '}
-                  <span className="font-mono text-[#5A564F]">WASD/QE</span> ·{' '}
-                  <span className="font-mono text-[#5A564F]">F12</span> Snapshot ·{' '}
-                  <span className="font-mono text-[#5A564F]">H</span> Zen Mode
+                  Shortcuts: <span className="font-mono text-[#5A564F]">G/R/S</span> Gizmo ·{' '}
+                  <span className="font-mono text-[#5A564F]">Shift+D</span> Clone ·{' '}
+                  <span className="font-mono text-[#5A564F]">Numpad 1/3/7/5/0</span> ·{' '}
+                  <span className="font-mono text-[#5A564F]">F12</span> Snap ·{' '}
+                  <span className="font-mono text-[#5A564F]">H</span> Zen
                 </div>
               </div>
             )}
@@ -2661,6 +3265,36 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
               <button
                 type="button"
+                onClick={() =>
+                  onGizmoModeChange(gizmoMode === 'translate' ? 'none' : 'translate')
+                }
+                title="Move Gizmo (G)"
+                aria-label="Toggle move gizmo"
+                className={`flex items-center gap-1 rounded-xl px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                  gizmoMode === 'translate'
+                    ? 'bg-[#2D5A4C] text-white'
+                    : 'text-[#5A564F] hover:bg-[#F5F3EF] hover:text-[#1C1B19]'
+                }`}
+              >
+                <Move className="h-3.5 w-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onGizmoModeChange(gizmoMode === 'rotate' ? 'none' : 'rotate')}
+                title="Rotate Gizmo (R)"
+                aria-label="Toggle rotate gizmo"
+                className={`flex items-center gap-1 rounded-xl px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                  gizmoMode === 'rotate'
+                    ? 'bg-[#2D5A4C] text-white'
+                    : 'text-[#5A564F] hover:bg-[#F5F3EF] hover:text-[#1C1B19]'
+                }`}
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   const next = toolMode === 'measure' ? 'orbit' : 'measure';
                   setToolMode(next);
@@ -2679,7 +3313,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
               <div className="mx-1 h-5 w-px shrink-0 bg-[#E5E1DA]" />
 
-              {/* Assembly & Stage Toggles */}
               <button
                 type="button"
                 onClick={onToggleExploded}
@@ -2739,7 +3372,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
               <div className="mx-1 h-5 w-px shrink-0 bg-[#E5E1DA]" />
 
-              {/* Popovers: Shading, Lighting, Snapshot, Studio Actions */}
               <button
                 type="button"
                 onClick={() => setOpenPopover(openPopover === 'shading' ? null : 'shading')}

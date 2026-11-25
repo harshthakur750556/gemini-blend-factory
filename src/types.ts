@@ -17,21 +17,43 @@ export type InsideOutSide = 'front' | 'back' | 'double';
 
 export type DragMouseMode = 'orbit' | 'pan' | 'zoom';
 
-export type ViewportToolMode =
-  | 'orbit'
-  | 'select'
-  | 'measure'
-  | 'explode'
-  | 'light'
-  | 'slice';
+export type ViewportToolMode = 'orbit' | 'select' | 'measure';
+
+export type GizmoMode = 'none' | 'translate' | 'rotate' | 'scale';
+
+export type GizmoSpace = 'world' | 'local';
 
 export type StudioLightingPreset = 'studio-4k' | 'architectural' | 'high-contrast' | 'soft-clay';
 
-export type WorkspaceModeId = 'inspect' | 'topology' | 'lookdev' | 'pipeline';
+export type WorldEnvironmentPreset = 'alabaster' | 'courtyard' | 'meadow' | 'desert';
 
-export type InspectorTabId = 'outliner' | 'material' | 'diagnostics' | 'rig';
+export type WorldPrimitiveKind =
+  | 'cube'
+  | 'sphere'
+  | 'cylinder'
+  | 'cone'
+  | 'torus'
+  | 'plane'
+  | 'arch'
+  | 'stairs'
+  | 'terrain'
+  | 'water'
+  | 'point-light'
+  | 'collider';
 
-export type WorkbenchTabId = 'agent' | 'vision' | 'script' | 'workspace';
+export type WorkspaceModeId = 'inspect' | 'world' | 'lookdev' | 'pipeline';
+
+export type InspectorTabId = 'outliner' | 'world' | 'material' | 'diagnostics' | 'rig';
+
+export type WorkbenchTabId = 'harness' | 'vision' | 'script' | 'workspace';
+
+export type ModelGroupName =
+  | 'Sample'
+  | 'Architecture'
+  | 'Props'
+  | 'Environment'
+  | 'World_Assemblies'
+  | 'Cloud_CI';
 
 export interface SectionCutConfig {
   enabled: boolean;
@@ -58,6 +80,9 @@ export interface TransformInfo {
   rotX: number;
   rotY: number;
   rotZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
 }
 
 export interface TopologyDiagnostics {
@@ -73,17 +98,55 @@ export interface TopologyDiagnostics {
   manifold: boolean;
 }
 
+export interface CapturedScreenshot {
+  id: string;
+  angle: 'hero' | 'front' | 'side' | 'top' | 'cycles' | 'custom';
+  label: string;
+  dataUrl: string;
+  createdAt: string;
+  githubPath?: string;
+  source: 'viewport' | 'cycles' | 'github';
+}
+
+export interface ModelBundleAssetFile {
+  name: string;
+  path: string;
+  url: string;
+  sizeBytes?: number;
+  kind: 'model' | 'texture' | 'screenshot' | 'script' | 'manifest';
+}
+
 export interface AvailableModelItem {
   id: string;
+  slug: string;
   name: string;
   source: 'github-release' | 'github-repo' | 'google-drive' | 'local-file' | 'specimen';
-  format: '.glb' | '.gltf' | '.obj' | '.stl' | '.blend' | 'procedural';
-  category?: 'Sample' | 'Cloud_CI' | 'Local_Workstation';
+  format:
+    | '.glb'
+    | '.gltf'
+    | '.obj'
+    | '.stl'
+    | '.ply'
+    | '.fbx'
+    | '.dae'
+    | '.usdz'
+    | '.usda'
+    | '.step'
+    | '.dxf'
+    | '.3mf'
+    | '.off'
+    | '.blend'
+    | 'procedural';
+  group: ModelGroupName;
   sizeBytes?: number;
   url?: string;
   driveFileId?: string;
   specimenKind?: 'stone-lantern';
   htmlUrl?: string;
+  repoFolderPath?: string;
+  buildPyPath?: string;
+  textures?: ModelBundleAssetFile[];
+  screenshots?: ModelBundleAssetFile[];
   viewable: boolean;
   updatedAt?: string;
   description?: string;
@@ -92,7 +155,7 @@ export interface AvailableModelItem {
 export interface OutlinerNode {
   uuid: string;
   name: string;
-  type: 'Mesh' | 'SkinnedMesh' | 'Bone' | 'Group';
+  type: 'Mesh' | 'SkinnedMesh' | 'Bone' | 'Group' | 'Light';
   depth: number;
   visible: boolean;
   locked: boolean;
@@ -195,18 +258,9 @@ export interface WorkspaceFileEntry {
   path: string;
   name: string;
   size: number;
-  source: 'local' | 'starter';
+  source: 'github' | 'local' | 'starter';
+  sha?: string;
   content?: string;
-}
-
-export interface PendingDiffProposal {
-  id: string;
-  path: string;
-  beforeContent: string;
-  afterContent: string;
-  status: 'pending' | 'approved' | 'rejected';
-  reason?: string;
-  createdAt: string;
 }
 
 export interface VisionDefect {
@@ -224,49 +278,13 @@ export interface VisionCritiqueResult {
   refinedScript: string;
 }
 
-export interface ToolTrace {
+export interface HarnessActivityItem {
   id: string;
-  name: string;
-  argsPreview: string;
-  status: 'running' | 'completed' | 'awaiting_approval' | 'error';
-  summary: string;
-}
-
-export interface ChatMessageItem {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  text: string;
   timestamp: string;
-  toolTraces?: ToolTrace[];
-  diffProposalId?: string;
-  visionCritique?: VisionCritiqueResult;
-  buildProgress?: {
-    mode: ExecutionMode;
-    stage: 'committing' | 'queued' | 'in_progress' | 'fetching_preview' | 'vision_audit' | 'completed' | 'failed';
-    commitSha?: string;
-    runUrl?: string;
-    detail: string;
-  };
-  error?: string;
-}
-
-export interface GeminiContentPart {
-  text?: string;
-  functionCall?: {
-    id?: string;
-    name: string;
-    args?: Record<string, unknown>;
-  };
-  functionResponse?: {
-    id?: string;
-    name: string;
-    response: Record<string, unknown>;
-  };
-  thoughtSignature?: string;
-  [key: string]: unknown;
-}
-
-export interface GeminiContentTurn {
-  role: 'user' | 'model';
-  parts: GeminiContentPart[];
+  stage: 'sync' | 'build' | 'screenshot' | 'vision' | 'reform';
+  title: string;
+  detail: string;
+  modelSlug?: string;
+  commitSha?: string;
+  status: 'completed' | 'running' | 'error';
 }
