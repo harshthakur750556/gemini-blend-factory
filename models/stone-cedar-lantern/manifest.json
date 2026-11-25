@@ -1,0 +1,22 @@
+{
+  "slug": "stone-cedar-lantern",
+  "name": "stone-cedar-lantern",
+  "group": "Props",
+  "screenshots": [
+    "models/stone-cedar-lantern/screenshots/latest_camera.png"
+  ],
+  "latestScreenshots": {
+    "updatedAt": "2026-11-25T17:08:49.814Z",
+    "revision": 1,
+    "latestPrimary": "models/stone-cedar-lantern/screenshots/latest_camera.png",
+    "files": [
+      {
+        "name": "latest_camera.png",
+        "angle": "camera",
+        "path": "models/stone-cedar-lantern/screenshots/latest_camera.png",
+        "updatedAt": "2026-11-25T17:08:49.814Z"
+      }
+    ]
+  },
+  "updatedAt": "2026-11-25T17:08:49.814Z"
+}
