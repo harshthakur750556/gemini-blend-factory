@@ -8,7 +8,6 @@ function createStoneBumpTexture(maxAnisotropy: number): THREE.CanvasTexture {
   if (ctx) {
     ctx.fillStyle = '#808080';
     ctx.fillRect(0, 0, 256, 256);
-    // Deterministic pseudo-random speckled granite micro-relief
     let seed = 1337;
     const rand = () => {
       seed = (seed * 16807) % 2147483647;
@@ -55,6 +54,7 @@ function createWoodGrainTexture(maxAnisotropy: number): THREE.CanvasTexture {
 }
 
 function createBeveledRectMesh(
+  name: string,
   w: number,
   h: number,
   d: number,
@@ -79,89 +79,112 @@ function createBeveledRectMesh(
     bevelSegments: 3,
     curveSegments: 8,
   });
-  // Rotate so extrusion lies along +Y and centers around origin
   geom.rotateX(-Math.PI / 2);
   geom.translate(0, -extrudeDepth * 0.5, 0);
   geom.computeVertexNormals();
 
   const mesh = new THREE.Mesh(geom, material);
+  mesh.name = name;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 }
 
 /**
- * Builds a composite 24-part beveled Japanese Stone-and-Wood Garden Lantern
- * matching scripts/build.py so the Three.js Live 3D Viewer renders a rich,
- * physically grounded starter asset prior to the first Cloud CI GLB download.
+ * Builds the curated architectural sample model: Stone & Cedar Garden Lantern.
+ * Matches scripts/build.py with named sub-assemblies, calibrated PBR materials
+ * (granite, dark slate, hinoki cedar, patinated bronze, warm shoji core), and a
+ * subtle two-bone architectural canopy articulation rig for testing pose & motion.
  */
 export function createStarterLanternGroup(maxAnisotropy: number): {
   group: THREE.Group;
+  animations: THREE.AnimationClip[];
   dispose: () => void;
 } {
   const group = new THREE.Group();
-  group.name = 'Starter_StoneWood_Lantern';
+  group.name = 'Stone_Cedar_Lantern';
 
   const stoneBump = createStoneBumpTexture(maxAnisotropy);
   const woodBump = createWoodGrainTexture(maxAnisotropy);
 
   const stoneMat = new THREE.MeshStandardMaterial({
-    color: 0x676b72,
-    roughness: 0.84,
-    metalness: 0.05,
+    name: 'Granite_Plinth_BSDF',
+    color: 0x7b7871,
+    roughness: 0.86,
+    metalness: 0.04,
     bumpMap: stoneBump,
     bumpScale: 0.012,
   });
 
   const slateMat = new THREE.MeshStandardMaterial({
-    color: 0x30353e,
-    roughness: 0.56,
-    metalness: 0.12,
+    name: 'Charcoal_Slate_BSDF',
+    color: 0x32373c,
+    roughness: 0.54,
+    metalness: 0.14,
     bumpMap: stoneBump,
     bumpScale: 0.008,
   });
 
   const woodMat = new THREE.MeshStandardMaterial({
-    color: 0x5c3621,
-    roughness: 0.48,
+    name: 'Hinoki_Cedar_BSDF',
+    color: 0x73482d,
+    roughness: 0.46,
     metalness: 0.04,
     bumpMap: woodBump,
     bumpScale: 0.006,
   });
 
   const bronzeMat = new THREE.MeshStandardMaterial({
-    color: 0x8b6b43,
+    name: 'Patinated_Bronze_BSDF',
+    color: 0x8f7450,
     roughness: 0.24,
     metalness: 0.9,
   });
 
   const shojiMat = new THREE.MeshStandardMaterial({
-    color: 0xfff0d4,
-    emissive: new THREE.Color(0xff9a38),
-    emissiveIntensity: 1.45,
-    roughness: 0.68,
+    name: 'Washi_Shoji_Core_BSDF',
+    color: 0xfff3de,
+    emissive: new THREE.Color(0xf6a957),
+    emissiveIntensity: 1.25,
+    roughness: 0.72,
     metalness: 0.0,
   });
 
+  // Architectural 2-bone hierarchy so Rig & Animation tools work organically
+  const baseBone = new THREE.Bone();
+  baseBone.name = 'Plinth_Foundation_Bone';
+  baseBone.position.set(0, 0, 0);
+  group.add(baseBone);
+
+  const canopyBone = new THREE.Bone();
+  canopyBone.name = 'Pagoda_Canopy_Bone';
+  canopyBone.position.set(0, 0.92, 0);
+  baseBone.add(canopyBone);
+
   // 1. Two-tier beveled granite plinth
-  const lowerPlinth = createBeveledRectMesh(0.84, 0.13, 0.84, 0.022, stoneMat);
+  const plinthAssembly = new THREE.Group();
+  plinthAssembly.name = 'Granite_Plinth_Assembly';
+  const lowerPlinth = createBeveledRectMesh('Granite_Plinth_Lower', 0.84, 0.13, 0.84, 0.022, stoneMat);
   lowerPlinth.position.y = 0.065;
-  group.add(lowerPlinth);
+  plinthAssembly.add(lowerPlinth);
 
-  const upperPlinth = createBeveledRectMesh(0.66, 0.11, 0.66, 0.018, stoneMat);
+  const upperPlinth = createBeveledRectMesh('Granite_Plinth_Upper', 0.66, 0.11, 0.66, 0.018, stoneMat);
   upperPlinth.position.y = 0.185;
-  group.add(upperPlinth);
+  plinthAssembly.add(upperPlinth);
+  baseBone.add(plinthAssembly);
 
-  // 2. Cedar sill & top lintel frames
-  const lowerFrame = createBeveledRectMesh(0.54, 0.058, 0.54, 0.008, woodMat);
+  // 2. Timber frame, bronze collars, and Kumiko lattice
+  const frameAssembly = new THREE.Group();
+  frameAssembly.name = 'Cedar_Timber_Frame';
+
+  const lowerFrame = createBeveledRectMesh('Cedar_Sill_Frame', 0.54, 0.058, 0.54, 0.008, woodMat);
   lowerFrame.position.y = 0.268;
-  group.add(lowerFrame);
+  frameAssembly.add(lowerFrame);
 
-  const upperFrame = createBeveledRectMesh(0.56, 0.058, 0.56, 0.008, woodMat);
+  const upperFrame = createBeveledRectMesh('Cedar_Lintel_Frame', 0.56, 0.058, 0.56, 0.008, woodMat);
   upperFrame.position.y = 0.91;
-  group.add(upperFrame);
+  frameAssembly.add(upperFrame);
 
-  // 3. Four corner cedar timber posts + patinated bronze collars
   const postOffset = 0.215;
   const corners: Array<[number, number]> = [
     [-1, -1],
@@ -169,79 +192,92 @@ export function createStarterLanternGroup(maxAnisotropy: number): {
     [1, 1],
     [-1, 1],
   ];
-  for (const [sx, sz] of corners) {
+  corners.forEach(([sx, sz], idx) => {
     const px = sx * postOffset;
     const pz = sz * postOffset;
 
-    const post = createBeveledRectMesh(0.066, 0.62, 0.066, 0.007, woodMat);
+    const post = createBeveledRectMesh(`Cedar_Corner_Post_${idx + 1}`, 0.066, 0.62, 0.066, 0.007, woodMat);
     post.position.set(px, 0.588, pz);
-    group.add(post);
+    frameAssembly.add(post);
 
-    const lowCollar = createBeveledRectMesh(0.078, 0.036, 0.078, 0.004, bronzeMat);
+    const lowCollar = createBeveledRectMesh(`Bronze_Collar_Lower_${idx + 1}`, 0.078, 0.036, 0.078, 0.004, bronzeMat);
     lowCollar.position.set(px, 0.312, pz);
-    group.add(lowCollar);
+    frameAssembly.add(lowCollar);
 
-    const highCollar = createBeveledRectMesh(0.078, 0.036, 0.078, 0.004, bronzeMat);
+    const highCollar = createBeveledRectMesh(`Bronze_Collar_Upper_${idx + 1}`, 0.078, 0.036, 0.078, 0.004, bronzeMat);
     highCollar.position.set(px, 0.865, pz);
-    group.add(highCollar);
-  }
+    frameAssembly.add(highCollar);
+  });
 
-  // 4. Kumiko horizontal and vertical muntin rails
   const muntinGeoH = new THREE.BoxGeometry(0.39, 0.02, 0.022);
   const muntinGeoV = new THREE.BoxGeometry(0.018, 0.56, 0.018);
+  const latticeAssembly = new THREE.Group();
+  latticeAssembly.name = 'Kumiko_Lattice_Mullions';
 
-  for (const railY of [0.47, 0.69]) {
+  [0.47, 0.69].forEach((railY, rIdx) => {
     const front = new THREE.Mesh(muntinGeoH, woodMat);
+    front.name = `Kumiko_Rail_North_${rIdx + 1}`;
     front.position.set(0, railY, 0.212);
     const back = new THREE.Mesh(muntinGeoH, woodMat);
+    back.name = `Kumiko_Rail_South_${rIdx + 1}`;
     back.position.set(0, railY, -0.212);
     const left = new THREE.Mesh(muntinGeoH, woodMat);
+    left.name = `Kumiko_Rail_West_${rIdx + 1}`;
     left.rotation.y = Math.PI / 2;
     left.position.set(-0.212, railY, 0);
     const right = new THREE.Mesh(muntinGeoH, woodMat);
+    right.name = `Kumiko_Rail_East_${rIdx + 1}`;
     right.rotation.y = Math.PI / 2;
     right.position.set(0.212, railY, 0);
-    group.add(front, back, left, right);
-  }
+    latticeAssembly.add(front, back, left, right);
+  });
 
-  for (const side of [-1, 1]) {
+  [-1, 1].forEach((side, sIdx) => {
     const vZ = new THREE.Mesh(muntinGeoV, woodMat);
+    vZ.name = `Kumiko_Stile_Z_${sIdx + 1}`;
     vZ.position.set(0, 0.585, side * 0.212);
     const vX = new THREE.Mesh(muntinGeoV, woodMat);
+    vX.name = `Kumiko_Stile_X_${sIdx + 1}`;
     vX.position.set(side * 0.212, 0.585, 0);
-    group.add(vZ, vX);
-  }
+    latticeAssembly.add(vZ, vX);
+  });
+  frameAssembly.add(latticeAssembly);
+  baseBone.add(frameAssembly);
 
-  // 5. Glowing shoji paper core
-  const shojiCore = createBeveledRectMesh(0.39, 0.57, 0.39, 0.01, shojiMat);
+  // 3. Glowing shoji diffuser core
+  const shojiCore = createBeveledRectMesh('Washi_Shoji_Diffuser', 0.39, 0.57, 0.39, 0.01, shojiMat);
   shojiCore.position.y = 0.588;
-  group.add(shojiCore);
+  baseBone.add(shojiCore);
 
-  // 6. Stepped curved pagoda slate roof (2 tiers + ridge ribs)
+  // 4. Stepped pagoda slate roof + capstone + lathe finial (mounted to canopyBone relative to y = 0.92)
+  const roofAssembly = new THREE.Group();
+  roofAssembly.name = 'Pagoda_Slate_Roof';
+
+  const eaveTrim = createBeveledRectMesh('Slate_Eave_Cornice', 1.02, 0.036, 1.02, 0.008, slateMat);
+  eaveTrim.position.y = 0.022;
+  roofAssembly.add(eaveTrim);
+
   const lowerRoofGeo = new THREE.CylinderGeometry(0.42, 0.72, 0.14, 4, 1);
   lowerRoofGeo.rotateY(Math.PI / 4);
   const lowerRoof = new THREE.Mesh(lowerRoofGeo, slateMat);
-  lowerRoof.position.y = 1.01;
+  lowerRoof.name = 'Slate_Roof_Tier_Lower';
+  lowerRoof.position.y = 0.09;
   lowerRoof.castShadow = true;
   lowerRoof.receiveShadow = true;
-  group.add(lowerRoof);
+  roofAssembly.add(lowerRoof);
 
   const upperRoofGeo = new THREE.CylinderGeometry(0.18, 0.44, 0.16, 4, 1);
   upperRoofGeo.rotateY(Math.PI / 4);
   const upperRoof = new THREE.Mesh(upperRoofGeo, slateMat);
-  upperRoof.position.y = 1.155;
+  upperRoof.name = 'Slate_Roof_Tier_Upper';
+  upperRoof.position.y = 0.235;
   upperRoof.castShadow = true;
   upperRoof.receiveShadow = true;
-  group.add(upperRoof);
+  roofAssembly.add(upperRoof);
 
-  const eaveTrim = createBeveledRectMesh(1.02, 0.036, 1.02, 0.008, slateMat);
-  eaveTrim.position.y = 0.942;
-  group.add(eaveTrim);
-
-  // 7. Capstone & LatheGeometry turned granite finial
-  const capstone = createBeveledRectMesh(0.28, 0.055, 0.28, 0.01, stoneMat);
-  capstone.position.y = 1.255;
-  group.add(capstone);
+  const capstone = createBeveledRectMesh('Granite_Capstone', 0.28, 0.055, 0.28, 0.01, stoneMat);
+  capstone.position.y = 0.335;
+  roofAssembly.add(capstone);
 
   const finialPoints = [
     new THREE.Vector2(0.0, 0.0),
@@ -255,20 +291,48 @@ export function createStarterLanternGroup(maxAnisotropy: number): {
   ];
   const finialGeo = new THREE.LatheGeometry(finialPoints, 24);
   const finial = new THREE.Mesh(finialGeo, stoneMat);
-  finial.position.y = 1.28;
+  finial.name = 'Turned_Granite_Finial';
+  finial.position.y = 0.36;
   finial.castShadow = true;
   finial.receiveShadow = true;
-  group.add(finial);
+  roofAssembly.add(finial);
 
-  // Warm subtle inner point light casting amber bounce onto wood posts
-  const lanternGlow = new THREE.PointLight(0xffa245, 1.8, 3.2, 1.6);
+  canopyBone.add(roofAssembly);
+
+  // Warm subtle inner point light casting amber bounce onto cedar mullions
+  const lanternGlow = new THREE.PointLight(0xffb45c, 1.6, 3.0, 1.6);
   lanternGlow.position.set(0, 0.58, 0);
-  group.add(lanternGlow);
+  baseBone.add(lanternGlow);
+
+  // Subtle architectural canopy lift/inspect clip for the Rig & Animation timeline
+  const times = [0, 1.5, 3.0, 4.5, 6.0];
+  const canopyLift = new THREE.VectorKeyframeTrack(
+    'Pagoda_Canopy_Bone.position',
+    times,
+    [0, 0.92, 0, 0, 1.04, 0, 0, 0.92, 0, 0, 0.96, 0, 0, 0.92, 0]
+  );
+  const canopyTurn = new THREE.QuaternionKeyframeTrack(
+    'Pagoda_Canopy_Bone.quaternion',
+    times,
+    [
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0)).toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.06, 0)).toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0)).toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -0.06, 0)).toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0)).toArray(),
+    ]
+  );
+  const animations = [new THREE.AnimationClip('Canopy_Inspection_Motion', 6.0, [canopyLift, canopyTurn])];
 
   const dispose = () => {
+    const seenGeo = new Set<THREE.BufferGeometry>();
     group.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
-        (obj as THREE.Mesh).geometry.dispose();
+        const g = (obj as THREE.Mesh).geometry;
+        if (!seenGeo.has(g)) {
+          seenGeo.add(g);
+          g.dispose();
+        }
       }
     });
     stoneMat.dispose();
@@ -280,5 +344,5 @@ export function createStarterLanternGroup(maxAnisotropy: number): {
     woodBump.dispose();
   };
 
-  return { group, dispose };
+  return { group, animations, dispose };
 }

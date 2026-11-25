@@ -3,21 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BlendFactory Live 3D Preview</title>
+    <title>BlendFactory Studio — Standalone Preview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
     <style>
       :root {
-        --bg: #0b0d10;
-        --panel: #12151b;
-        --border: #232934;
-        --text: #e6e9ef;
-        --muted: #8b95a7;
-        --accent: #e87d24;
+        --bg: #eceae4;
+        --panel: rgba(255, 255, 255, 0.96);
+        --border: #e5e1da;
+        --ink: #1c1b19;
+        --muted: #6c6860;
+        --accent: #2d5a4c;
+        --accent-hover: #22453a;
       }
       * {
         box-sizing: border-box;
@@ -30,8 +31,8 @@
         height: 100%;
         overflow: hidden;
         background: var(--bg);
-        color: var(--text);
-        font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--ink);
+        font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
       }
       #canvas-host {
         position: fixed;
@@ -42,8 +43,8 @@
       .top-bar {
         position: fixed;
         top: 16px;
-        left: 16px;
-        right: 16px;
+        left: 20px;
+        right: 20px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -53,22 +54,22 @@
       .brand-card {
         pointer-events: auto;
         display: flex;
-        align-items: center;
+        align-items: baseline;
         gap: 12px;
-        background: rgba(18, 21, 27, 0.92);
+        background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px 14px;
+        border-radius: 14px;
+        padding: 10px 16px;
+        box-shadow: 0 10px 30px -12px rgba(28, 27, 25, 0.12);
       }
       .brand-title {
-        font-family: "Plus Jakarta Sans", sans-serif;
-        font-size: 14px;
-        font-weight: 700;
+        font-family: "Fraunces", Georgia, serif;
+        font-size: 16px;
+        font-weight: 600;
         letter-spacing: -0.01em;
       }
       .brand-meta {
-        font-family: "JetBrains Mono", monospace;
-        font-size: 11px;
+        font-size: 12px;
         color: var(--muted);
       }
       .downloads {
@@ -80,46 +81,47 @@
       .btn {
         appearance: none;
         border: 1px solid var(--border);
-        background: rgba(18, 21, 27, 0.92);
-        color: var(--text);
-        font-family: "DM Sans", sans-serif;
+        background: var(--panel);
+        color: var(--ink);
+        font-family: "Plus Jakarta Sans", sans-serif;
         font-size: 12px;
         font-weight: 500;
-        padding: 8px 13px;
-        border-radius: 8px;
+        padding: 8px 14px;
+        border-radius: 10px;
         text-decoration: none;
         cursor: pointer;
         transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
         white-space: nowrap;
       }
       .btn:hover {
-        border-color: #3a4456;
-        background: #1a1f28;
+        border-color: #c9c3b8;
+        background: #faf9f6;
       }
       .btn-primary {
         background: var(--accent);
         border-color: var(--accent);
-        color: #0b0d10;
+        color: #ffffff;
         font-weight: 600;
       }
       .btn-primary:hover {
-        background: #f28c38;
-        border-color: #f28c38;
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
       }
       .btn[aria-pressed="true"] {
         border-color: var(--accent);
-        color: #ffb169;
-        background: rgba(232, 125, 36, 0.14);
+        color: var(--accent);
+        background: #ebf2ef;
       }
       .preview-card {
         position: fixed;
-        right: 16px;
-        bottom: 16px;
-        width: 184px;
-        background: rgba(18, 21, 27, 0.94);
+        right: 20px;
+        bottom: 20px;
+        width: 180px;
+        background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 10px;
+        border-radius: 14px;
         padding: 10px;
+        box-shadow: 0 10px 30px -12px rgba(28, 27, 25, 0.12);
         z-index: 20;
       }
       .preview-label {
@@ -128,48 +130,47 @@
         margin-bottom: 8px;
         display: flex;
         justify-content: space-between;
-        font-family: "JetBrains Mono", monospace;
+        font-family: "IBM Plex Mono", monospace;
       }
       .preview-card img {
         width: 100%;
         aspect-ratio: 1 / 1;
         object-fit: cover;
-        border-radius: 6px;
+        border-radius: 8px;
         display: block;
         border: 1px solid var(--border);
-        background: #0b0d10;
+        background: #f5f3ef;
       }
       .controls-dock {
         position: fixed;
         left: 50%;
-        bottom: 16px;
+        bottom: 20px;
         transform: translateX(-50%);
         display: flex;
         align-items: center;
         gap: 8px;
-        background: rgba(18, 21, 27, 0.94);
+        background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 10px;
+        border-radius: 14px;
         padding: 8px 10px;
+        box-shadow: 0 10px 30px -12px rgba(28, 27, 25, 0.14);
         z-index: 20;
       }
       #status-banner {
         position: fixed;
-        left: 16px;
-        bottom: 16px;
-        font-family: "JetBrains Mono", monospace;
+        left: 20px;
+        bottom: 20px;
+        font-family: "IBM Plex Mono", monospace;
         font-size: 11px;
         color: var(--muted);
-        background: rgba(18, 21, 27, 0.9);
+        background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 7px 10px;
+        border-radius: 10px;
+        padding: 8px 12px;
         z-index: 20;
       }
       @media (max-width: 720px) {
-        .preview-card {
-          display: none;
-        }
+        .preview-card,
         #status-banner {
           display: none;
         }
@@ -189,13 +190,14 @@
 
     <header class="top-bar">
       <div class="brand-card">
-        <span class="brand-title">BlendFactory Live Preview</span>
-        <span class="brand-meta">Blender 4.2 LTS &middot; GLB</span>
+        <span class="brand-title">BlendFactory</span>
+        <span class="brand-meta">Live Render &middot; Blender 4.2 LTS</span>
       </div>
       <div class="downloads">
-        <a class="btn" href="./model.glb" download="model.glb">Download model.glb</a>
+        <a class="btn" href="./">Open Full Studio</a>
+        <a class="btn" href="./model.glb" download="model.glb">Download .glb</a>
         <a id="blend-download" class="btn btn-primary" href="../releases/latest/download/model.blend">
-          Download model.blend
+          Download .blend
         </a>
       </div>
     </header>
@@ -211,7 +213,7 @@
     <div id="status-banner">Loading ./model.glb...</div>
 
     <nav class="controls-dock" aria-label="3D viewport controls">
-      <button id="btn-rotate" class="btn" type="button" aria-pressed="true">Auto-Rotate</button>
+      <button id="btn-rotate" class="btn" type="button" aria-pressed="true">Turntable</button>
       <button id="btn-wireframe" class="btn" type="button" aria-pressed="false">Wireframe</button>
       <button id="btn-reset" class="btn" type="button">Reset Camera</button>
     </nav>
@@ -222,7 +224,6 @@
       import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
       import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
-      // Resolve GitHub Release download URL automatically when hosted on GitHub Pages
       (function resolveReleaseLink() {
         const blendLink = document.getElementById("blend-download");
         const host = window.location.hostname;
@@ -241,8 +242,8 @@
       const btnReset = document.getElementById("btn-reset");
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0b0d10);
-      scene.fog = new THREE.Fog(0x0b0d10, 12, 34);
+      scene.background = new THREE.Color(0xeceae4);
+      scene.fog = new THREE.Fog(0xeceae4, 12, 34);
 
       const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.05, 120);
       camera.position.set(2.2, 1.5, 2.4);
@@ -252,7 +253,7 @@
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.1;
+      renderer.toneMappingExposure = 1.08;
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       host.appendChild(renderer.domElement);
@@ -261,23 +262,21 @@
       scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
       pmrem.dispose();
 
-      // Three-point studio lighting
-      const hemiLight = new THREE.HemisphereLight(0xdce8ff, 0x1e222a, 0.65);
+      const hemiLight = new THREE.HemisphereLight(0xf6f8fc, 0xcfc9be, 0.85);
       scene.add(hemiLight);
 
-      const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.2);
+      const keyLight = new THREE.DirectionalLight(0xfff5e6, 2.2);
       keyLight.position.set(4.5, 6.2, 3.8);
       keyLight.castShadow = true;
       keyLight.shadow.mapSize.set(1024, 1024);
       keyLight.shadow.bias = -0.0005;
       scene.add(keyLight);
 
-      const rimLight = new THREE.DirectionalLight(0x88b4ff, 1.1);
+      const rimLight = new THREE.DirectionalLight(0xdce7f5, 0.9);
       rimLight.position.set(-4.0, 3.2, -3.5);
       scene.add(rimLight);
 
-      // Subtle reference grid
-      const grid = new THREE.GridHelper(12, 24, 0x2d3544, 0x1a1f29);
+      const grid = new THREE.GridHelper(12, 24, 0xcbc5ba, 0xddd8ce);
       grid.position.y = -0.002;
       scene.add(grid);
 
@@ -285,7 +284,7 @@
       controls.enableDamping = true;
       controls.dampingFactor = 0.07;
       controls.autoRotate = true;
-      controls.autoRotateSpeed = 1.25;
+      controls.autoRotateSpeed = 1.1;
       controls.target.set(0, 0.6, 0);
 
       let loadedModel = null;

@@ -1,88 +1,118 @@
 import React, { useMemo } from 'react';
-import type { PendingDiffProposal } from '../types';
+import { Check, FileCode2, X } from 'lucide-react';
 import { computeLineDiff, extractDiffHunks } from '../utils/diffEngine';
+import type { PendingDiffProposal } from '../types';
 
 interface DiffApprovalCardProps {
   proposal: PendingDiffProposal;
-  onApprove: (id: string) => void;
-  onReject: (id: string) => void;
-  busy?: boolean;
+  isBusy: boolean;
+  onApprove: (proposalId: string) => void;
+  onReject: (proposalId: string) => void;
 }
 
 export const DiffApprovalCard: React.FC<DiffApprovalCardProps> = ({
   proposal,
+  isBusy,
   onApprove,
   onReject,
-  busy = false,
 }) => {
   const diff = useMemo(
     () => computeLineDiff(proposal.beforeContent, proposal.afterContent),
     [proposal.beforeContent, proposal.afterContent]
   );
-  const hunks = useMemo(() => extractDiffHunks(diff, 2), [diff]);
+
+  const rows = useMemo(() => extractDiffHunks(diff, 3), [diff]);
 
   return (
-    <div className="mt-2 rounded-lg border border-[#cbd5e1] bg-white overflow-hidden shadow-sm">
-      <div className="px-3 py-2 bg-[#f8f9fa] border-b border-[#dcdfe4] flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="material-symbols-outlined text-[15px] text-[#111318]">difference</span>
-          <span className="font-mono text-[11px] font-semibold text-[#111318] truncate">{proposal.path}</span>
+    <div className="my-2.5 overflow-hidden rounded-xl border border-[#E5E1DA] bg-white shadow-[0_6px_20px_-8px_rgba(28,27,25,0.1)]">
+      <div className="flex items-center justify-between gap-2 border-b border-[#EFECE6] bg-[#FAF9F6] px-3.5 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileCode2 className="h-3.5 w-3.5 shrink-0 text-[#2D5A4C]" />
+          <span className="truncate font-mono text-[11px] font-medium text-[#1C1B19]">
+            {proposal.path}
+          </span>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0">
-          <span className="text-emerald-700 font-semibold">+{diff.additions}</span>
-          <span className="text-red-600 font-semibold">-{diff.deletions}</span>
-          <span className="px-1.5 py-0.5 rounded bg-[#f0f2f5] border border-[#dcdfe4] text-[#111318] uppercase text-[9px]">
+        <div className="flex shrink-0 items-center gap-2 font-mono text-[10px] tabular-nums">
+          <span className="text-[#2D5A4C]">+{diff.additions}</span>
+          <span className="text-[#A8383B]">-{diff.deletions}</span>
+          <span className="text-[#847E75]">·</span>
+          <span className="text-[10px] font-medium capitalize text-[#5A564F]">
             {proposal.status}
           </span>
         </div>
       </div>
 
-      <div className="max-h-52 overflow-y-auto font-mono text-[10px] leading-relaxed bg-[#fcfcfd]">
-        {hunks.slice(0, 60).map((row, idx) => {
-          if (row.kind === 'separator') {
-            return (
-              <div
-                key={`sep-${idx}`}
-                className="px-3 py-0.5 bg-[#f0f2f5] text-[#64748b] border-y border-[#e5e8ec]"
-              >
-                ··· {row.skippedCount} unchanged lines ···
-              </div>
-            );
-          }
-          const line = row.line;
-          const bg =
-            line.type === 'add'
-              ? 'bg-emerald-50 text-emerald-950'
-              : line.type === 'remove'
-                ? 'bg-red-50 text-red-900'
-                : 'text-[#334155]';
-          const prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
-          return (
-            <div key={`l-${idx}`} className={`px-3 py-0.5 whitespace-pre-wrap break-all ${bg}`}>
-              <span className="inline-block w-4 select-none opacity-70">{prefix}</span>
-              {line.content}
-            </div>
-          );
-        })}
+      {proposal.reason && (
+        <div className="border-b border-[#EFECE6] px-3.5 py-2 text-[11px] text-[#5A564F]">
+          {proposal.reason}
+        </div>
+      )}
+
+      <div className="max-h-56 overflow-auto bg-[#FCFBF9] font-mono text-[10.5px] leading-[1.55]">
+        {!diff.changed ? (
+          <div className="px-3.5 py-3 text-[#847E75]">
+            No textual differences detected relative to current file contents.
+          </div>
+        ) : (
+          <table className="w-full border-collapse">
+            <tbody>
+              {rows.map((row, idx) => {
+                if (row.kind === 'separator') {
+                  return (
+                    <tr key={`sep-${idx}`} className="bg-[#F3F0EA] text-[#847E75]">
+                      <td colSpan={3} className="px-3 py-1 text-[10px]">
+                        ··· {row.skippedCount} unchanged lines ···
+                      </td>
+                    </tr>
+                  );
+                }
+                const { line } = row;
+                const rowClass =
+                  line.type === 'add'
+                    ? 'bg-[#EBF4F0] text-[#1D4438]'
+                    : line.type === 'remove'
+                      ? 'bg-[#FAEDED] text-[#8D2C2F]'
+                      : 'text-[#5A564F]';
+                const marker = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+                return (
+                  <tr key={`ln-${idx}`} className={rowClass}>
+                    <td className="w-8 select-none border-r border-[#EFECE6] px-1.5 text-right text-[9.5px] text-[#A29B90] tabular-nums">
+                      {line.oldLineNumber ?? ''}
+                    </td>
+                    <td className="w-8 select-none border-r border-[#EFECE6] px-1.5 text-right text-[9.5px] text-[#A29B90] tabular-nums">
+                      {line.newLineNumber ?? ''}
+                    </td>
+                    <td className="whitespace-pre-wrap break-all px-2.5 py-0.5">
+                      <span className="mr-1.5 select-none font-semibold">{marker}</span>
+                      {line.content}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {proposal.status === 'pending' && (
-        <div className="px-3 py-2 bg-[#f8f9fa] border-t border-[#dcdfe4] flex items-center justify-end gap-2">
+        <div className="flex items-center justify-end gap-2 border-t border-[#EFECE6] bg-[#FAF9F6] px-3.5 py-2.5">
           <button
             type="button"
-            disabled={busy}
+            disabled={isBusy}
             onClick={() => onReject(proposal.id)}
-            className="px-2.5 py-1 rounded border border-[#dcdfe4] bg-white hover:bg-[#f0f2f5] text-[#111318] text-[11px] font-medium cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#DCD7CE] bg-white px-3 py-1.5 text-[11px] font-medium text-[#5A564F] transition-colors hover:border-[#C5BEB3] hover:text-[#1C1B19] disabled:opacity-50"
           >
+            <X className="h-3.5 w-3.5" />
             Reject
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={isBusy}
             onClick={() => onApprove(proposal.id)}
-            className="px-3 py-1 rounded bg-[#111318] hover:bg-black text-white text-[11px] font-semibold cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#2D5A4C] px-3.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-[#22453A] disabled:opacity-50"
           >
-            Approve &amp; Write File
+            <Check className="h-3.5 w-3.5" />
+            Approve & Write
           </button>
         </div>
       )}

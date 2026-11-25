@@ -17,7 +17,7 @@ export type InsideOutSide = 'front' | 'back' | 'double';
 
 export type DragMouseMode = 'orbit' | 'pan' | 'zoom';
 
-export type LeftToolMode =
+export type ViewportToolMode =
   | 'orbit'
   | 'select'
   | 'measure'
@@ -25,13 +25,13 @@ export type LeftToolMode =
   | 'light'
   | 'slice';
 
-export type HdriPreset = 'studio-4k' | 'architectural' | 'high-contrast' | 'soft-clay';
+export type StudioLightingPreset = 'studio-4k' | 'architectural' | 'high-contrast' | 'soft-clay';
 
-export type WorkspaceTabId = 'inspection' | 'uv-topology' | 'lookdev' | 'baking';
+export type WorkspaceModeId = 'inspect' | 'topology' | 'lookdev' | 'pipeline';
 
 export type InspectorTabId = 'outliner' | 'material' | 'diagnostics' | 'rig';
 
-export type StudioDrawerTabId = 'agent' | 'vision' | 'script' | 'workspace';
+export type WorkbenchTabId = 'agent' | 'vision' | 'script' | 'workspace';
 
 export interface SectionCutConfig {
   enabled: boolean;
@@ -78,11 +78,11 @@ export interface AvailableModelItem {
   name: string;
   source: 'github-release' | 'github-repo' | 'google-drive' | 'local-file' | 'specimen';
   format: '.glb' | '.gltf' | '.obj' | '.stl' | '.blend' | 'procedural';
-  category?: 'Mech_Frames' | 'Rigged_Assets' | 'Cloud_CI' | 'Environment_Props';
+  category?: 'Sample' | 'Cloud_CI' | 'Local_Workstation';
   sizeBytes?: number;
   url?: string;
   driveFileId?: string;
-  specimenKind?: 'apex-mech' | 'rigged-arm' | 'stone-lantern';
+  specimenKind?: 'stone-lantern';
   htmlUrl?: string;
   viewable: boolean;
   updatedAt?: string;

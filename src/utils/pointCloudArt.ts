@@ -20,28 +20,27 @@ function createSoftPointTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Generates an architectural sculptural 3D Point Cloud Art centerpiece displayed
- * when NO 3D model is loaded on the stage.
- * Styled in crisp obsidian/graphite/slate monochrome for the Apex 3D light studio theme.
+ * Generates a calm sculptural 3D Point Cloud centerpiece displayed when the
+ * user clears the stage. Styled in deep botanical sage, warm espresso charcoal,
+ * and mineral stone to harmonize with the Atelier gallery theme.
  */
-export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
+export function createPointCloudArtGroup(): {
   group: THREE.Group;
   update: (elapsedSec: number) => void;
   dispose: () => void;
 } {
   const group = new THREE.Group();
-  group.name = 'PointCloudArt_Stage';
+  group.name = 'Sculptural_Point_Cloud';
 
   const spriteTex = createSoftPointTexture();
 
-  // 1. Primary sculptural parametric torus-knot harmonic point field (2,800 pts)
-  const primaryCount = 2800;
+  const primaryCount = 2600;
   const primaryPos = new Float32Array(primaryCount * 3);
   const primaryColors = new Float32Array(primaryCount * 3);
 
-  const colorA = new THREE.Color(theme === 'light' ? '#111318' : '#E8833A');
-  const colorB = new THREE.Color(theme === 'light' ? '#334155' : '#F3DEC4');
-  const colorC = new THREE.Color(theme === 'light' ? '#64748b' : '#6F89B0');
+  const colorA = new THREE.Color('#2D5A4C');
+  const colorB = new THREE.Color('#1C1B19');
+  const colorC = new THREE.Color('#8E867B');
   const tmpColor = new THREE.Color();
 
   let seed = 4201;
@@ -54,11 +53,11 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
     const t = (i / primaryCount) * Math.PI * 2 * 3;
     const p = 2;
     const q = 3;
-    const rTube = 0.25 + 0.11 * Math.sin(t * 2.5);
-    const radial = 1.02 + 0.36 * Math.cos(q * t);
+    const rTube = 0.24 + 0.1 * Math.sin(t * 2.5);
+    const radial = 1.0 + 0.34 * Math.cos(q * t);
 
     const bx = radial * Math.cos(p * t);
-    const by = 0.42 * Math.sin(q * t) + 1.0;
+    const by = 0.4 * Math.sin(q * t) + 1.0;
     const bz = radial * Math.sin(p * t);
 
     const ang = rand() * Math.PI * 2;
@@ -70,9 +69,9 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
 
     const blend = (Math.sin(t * 1.5) + 1) * 0.5;
     if (blend < 0.5) {
-      tmpColor.copy(colorC).lerp(colorB, blend * 2);
+      tmpColor.copy(colorC).lerp(colorA, blend * 2);
     } else {
-      tmpColor.copy(colorB).lerp(colorA, (blend - 0.5) * 2);
+      tmpColor.copy(colorA).lerp(colorB, (blend - 0.5) * 2);
     }
     primaryColors[i * 3] = tmpColor.r;
     primaryColors[i * 3 + 1] = tmpColor.g;
@@ -84,22 +83,21 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
   primaryGeo.setAttribute('color', new THREE.BufferAttribute(primaryColors, 3));
 
   const primaryMat = new THREE.PointsMaterial({
-    size: theme === 'light' ? 0.044 : 0.048,
+    size: 0.042,
     map: spriteTex,
     vertexColors: true,
     transparent: true,
-    opacity: theme === 'light' ? 0.9 : 0.92,
+    opacity: 0.88,
     depthWrite: false,
-    blending: theme === 'light' ? THREE.NormalBlending : THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     sizeAttenuation: true,
   });
 
   const primaryCloud = new THREE.Points(primaryGeo, primaryMat);
-  primaryCloud.name = 'Point_Cloud_Harmonic_Core';
+  primaryCloud.name = 'Harmonic_Point_Sculpture';
   group.add(primaryCloud);
 
-  // 2. Outer Fibonacci architectural reference halo (650 vertices)
-  const haloCount = 650;
+  const haloCount = 600;
   const haloPos = new Float32Array(haloCount * 3);
   const haloColors = new Float32Array(haloCount * 3);
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
@@ -108,10 +106,10 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
     const yNorm = 1 - (i / (haloCount - 1)) * 2;
     const radiusAtY = Math.sqrt(Math.max(0, 1 - yNorm * yNorm));
     const theta = goldenAngle * i;
-    const rad = 1.9;
+    const rad = 1.85;
 
     haloPos[i * 3] = Math.cos(theta) * radiusAtY * rad;
-    haloPos[i * 3 + 1] = yNorm * 1.18 + 1.0;
+    haloPos[i * 3 + 1] = yNorm * 1.14 + 1.0;
     haloPos[i * 3 + 2] = Math.sin(theta) * radiusAtY * rad;
 
     tmpColor.copy(colorC).lerp(colorA, (yNorm + 1) * 0.35);
@@ -125,25 +123,24 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
   haloGeo.setAttribute('color', new THREE.BufferAttribute(haloColors, 3));
 
   const haloMat = new THREE.PointsMaterial({
-    size: 0.026,
+    size: 0.025,
     map: spriteTex,
     vertexColors: true,
     transparent: true,
-    opacity: theme === 'light' ? 0.45 : 0.52,
+    opacity: 0.42,
     depthWrite: false,
-    blending: theme === 'light' ? THREE.NormalBlending : THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     sizeAttenuation: true,
   });
 
   const haloCloud = new THREE.Points(haloGeo, haloMat);
-  haloCloud.name = 'Geodesic_Fibonacci_Halo';
+  haloCloud.name = 'Fibonacci_Reference_Halo';
   group.add(haloCloud);
 
-  // 3. Precision architectural meridian rings
   const ringMat = new THREE.LineBasicMaterial({
-    color: theme === 'light' ? 0x64748b : 0x2c3445,
+    color: 0xa49d92,
     transparent: true,
-    opacity: theme === 'light' ? 0.35 : 0.42,
+    opacity: 0.36,
   });
 
   const makeRing = (name: string, radius: number, yPos: number, tiltX: number, tiltZ: number) => {
@@ -161,16 +158,16 @@ export function createPointCloudArtGroup(theme: 'light' | 'dark' = 'light'): {
     return { line, geo };
   };
 
-  const ringA = makeRing('Calibration_Ring_Outer', 1.62, 1.0, 0.28, -0.18);
-  const ringB = makeRing('Calibration_Ring_Inner', 1.35, 1.0, -0.45, 0.35);
+  const ringA = makeRing('Meridian_Ring_Outer', 1.6, 1.0, 0.28, -0.18);
+  const ringB = makeRing('Meridian_Ring_Inner', 1.32, 1.0, -0.45, 0.35);
   group.add(ringA.line, ringB.line);
 
   const update = (elapsedSec: number) => {
     primaryCloud.rotation.y = elapsedSec * 0.14;
-    primaryCloud.rotation.x = Math.sin(elapsedSec * 0.25) * 0.07;
-    haloCloud.rotation.y = -elapsedSec * 0.06;
-    ringA.line.rotation.y = elapsedSec * 0.09;
-    ringB.line.rotation.y = -elapsedSec * 0.07;
+    primaryCloud.rotation.x = Math.sin(elapsedSec * 0.25) * 0.06;
+    haloCloud.rotation.y = -elapsedSec * 0.05;
+    ringA.line.rotation.y = elapsedSec * 0.08;
+    ringB.line.rotation.y = -elapsedSec * 0.06;
   };
 
   const dispose = () => {

@@ -113,3 +113,14 @@ export function buildGitHubReleaseUrl(owner: string | null, repo: string | null)
   }
   return `https://github.com/${owner}/${repo}/releases/tag/latest`;
 }
+
+/**
+ * Resolves a validated GitHub Pages static release artifact path relative to
+ * the current site base path (e.g. "/repo/" -> "./model.glb"), rejecting any
+ * non-whitelisted filenames.
+ */
+export function resolveStaticPagesAssetUrl(asset: string): string | null {
+  if (!validateReleaseAsset(asset)) return null;
+  return `./${asset}`;
+}
+

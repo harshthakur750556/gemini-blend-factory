@@ -4,6 +4,7 @@ import {
   buildGitHubPagesUrl,
   buildGitHubReleaseUrl,
   normalizeWorkspacePath,
+  resolveStaticPagesAssetUrl,
   validateGithubSlug,
   validateLocalBlenderEndpoint,
   validateReleaseAsset,
@@ -61,6 +62,10 @@ test('GitHub slug, release asset, and Pages URL helpers validate inputs strictly
   assert.equal(validateReleaseAsset('preview.png'), true);
   assert.equal(validateReleaseAsset('model.blend'), true);
   assert.equal(validateReleaseAsset('secrets.env'), false);
+
+  assert.equal(resolveStaticPagesAssetUrl('model.glb'), './model.glb');
+  assert.equal(resolveStaticPagesAssetUrl('preview.png'), './preview.png');
+  assert.equal(resolveStaticPagesAssetUrl('../secret.txt'), null);
 
   assert.equal(
     buildGitHubPagesUrl('MyOrg', 'gemini-blend-factory'),

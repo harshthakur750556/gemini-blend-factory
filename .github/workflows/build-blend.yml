@@ -1,12 +1,10 @@
-name: Build Blender 4.2 LTS Asset & Deploy Preview
+name: Build Studio & Blender 4.2 LTS Asset to GitHub Pages
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - "scripts/build.py"
 
 permissions:
   contents: write
@@ -18,13 +16,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-blend:
-    name: Headless Blender 4.2.16 LTS Build & Render
+  build-and-render:
+    name: Build Studio UI & Headless Blender 4.2.16 LTS Asset
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies & build BlendFactory Studio UI
+        run: |
+          npm ci
+          npm run build
 
       - name: Cache Blender 4.2.16 LTS Linux x64
         id: cache-blender
@@ -81,12 +90,17 @@ jobs:
             outputs/preview.png \
             --clobber
 
-      - name: Assemble GitHub Pages _site artifact
+      - name: Assemble GitHub Pages _site artifact with full Studio UI & CI outputs
         run: |
+          rm -rf _site
           mkdir -p _site
-          cp preview/index.html _site/index.html
+          cp -r dist/* _site/
           cp outputs/model.glb _site/model.glb
           cp outputs/preview.png _site/preview.png
+          if [ -f preview/index.html ]; then
+            cp preview/index.html _site/preview.html
+          fi
+          touch _site/.nojekyll
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -96,9 +110,9 @@ jobs:
         with:
           path: _site
 
-  deploy-preview:
-    name: Deploy Live 3D Viewer to GitHub Pages
-    needs: build-blend
+  deploy-pages:
+    name: Deploy BlendFactory Studio to GitHub Pages
+    needs: build-and-render
     runs-on: ubuntu-latest
     environment:
       name: github-pages
