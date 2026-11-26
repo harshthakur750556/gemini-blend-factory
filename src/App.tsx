@@ -34,7 +34,12 @@ import {
 } from './utils/modelExporters';
 import { extractTexturesFromObject3D } from './utils/worldPrimitives';
 import { validateModelUpload } from './utils/modelUploadValidation';
-import { resolveStaticPagesAssetUrl, sanitizeModelSlug } from './utils/pathSafety';
+import {
+  buildLatestScreenshotFilename,
+  isLatestScreenshotFilename,
+  resolveStaticPagesAssetUrl,
+  sanitizeModelSlug,
+} from './utils/pathSafety';
 import type { ParsedModelSummary } from './utils/modelConverter';
 import type {
   AnimationClipSummary,
@@ -54,6 +59,8 @@ import type {
   OutlinerNode,
   SceneTelemetry,
   SectionCutConfig,
+  SelectedCameraInfo,
+  SelectedLightInfo,
   ServerConfig,
   ShadingPass,
   StudioLightingPreset,
@@ -223,6 +230,8 @@ export function App() {
   const [animationDuration, setAnimationDuration] = useState(0);
   const [animationTime, setAnimationTime] = useState(0);
   const [animationPlaying, setAnimationPlaying] = useState(false);
+  const [selectedLightInfo, setSelectedLightInfo] = useState<SelectedLightInfo | null>(null);
+  const [selectedCameraInfo, setSelectedCameraInfo] = useState<SelectedCameraInfo | null>(null);
 
   // Asset Library & Cloud/Static Environment State
   const [isStaticSite, setIsStaticSite] = useState(false);
@@ -453,11 +462,16 @@ export function App() {
               ? 'side'
               : s.name.includes('top')
                 ? 'top'
-                : 'hero',
+                : s.name.includes('camera')
+                  ? 'camera'
+                  : s.name.includes('viewport')
+                    ? 'viewport'
+                    : 'hero',
           label: s.name.replace(/\.[^.]+$/, ''),
           dataUrl: s.url,
           createdAt: new Date().toISOString(),
           githubPath: s.path,
+          isLatest: isLatestScreenshotFilename(s.name),
           source: 'github',
         }));
         setRealCaptures((prev) => {
@@ -546,7 +560,81 @@ export function App() {
     return () => unsub();
   }, [refreshDriveModels]);
 
-  // Global keyboard shortcuts (Escape, Alt+Ctrl+Q, F12)
+  // Repo-first screenshot saving (ZERO browser auto-download!)
+  const handleCaptureViewportToRepo = useCallback(
+    async (dataUrl: string, angle: 'viewport' | 'camera' = 'viewport') => {
+      const slug = sanitizeModelSlug(activeModelSlug || telemetry.modelName || 'model');
+      const latestFileName = buildLatestScreenshotFilename(angle);
+      const stamp = new Date().toISOString();
+      const newShot: CapturedScreenshot = {
+        id: `vp-${angle}-${Date.now()}`,
+        angle,
+        label: angle === 'camera' ? 'latest_camera' : 'latest_viewport',
+        dataUrl,
+        createdAt: stamp,
+        githubPath: `models/${slug}/screenshots/${latestFileName}`,
+        isLatest: true,
+        source: 'viewport',
+      };
+
+      setRealCaptures((prev) => [newShot, ...prev.slice(0, 11)]);
+      setCompareAId(newShot.id);
+
+      const contentBase64 = dataUrl.split(',')[1] || '';
+      if (!contentBase64) return;
+
+      if (!serverConfig?.githubConfigured) {
+        pushHarnessActivity(
+          'screenshot',
+          `Captured ${latestFileName}`,
+          'Added to local Vision QA. Connect GitHub token to commit into models/' + slug + '/screenshots/.',
+          'completed',
+          slug
+        );
+        notify(`Saved ${latestFileName} to Vision QA (connect GitHub to sync to repo)`);
+        return;
+      }
+
+      const res = await fetchJsonSafe<{
+        stored?: boolean;
+        uploaded?: boolean;
+        latestPrimary?: string;
+        error?: string;
+      }>(`/api/harness/models/${encodeURIComponent(slug)}/screenshots`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          screenshots: [{ name: latestFileName, contentBase64 }],
+          commitMessage: `Update ${latestFileName} for models/${slug}/`,
+        }),
+      });
+
+      if (!res.ok || (!res.data?.stored && !res.data?.uploaded)) {
+        notify(res.data?.error || `Saved ${latestFileName} to Vision QA (GitHub sync failed)`);
+        return;
+      }
+
+      pushHarnessActivity(
+        'screenshot',
+        `Saved models/${slug}/screenshots/${latestFileName}`,
+        `Updated manifest.json latestScreenshots pointer for AI harnesses.`,
+        'completed',
+        slug
+      );
+      notify(`Saved ${latestFileName} to models/${slug}/screenshots/`);
+      await refreshServerAndCi();
+    },
+    [
+      activeModelSlug,
+      notify,
+      pushHarnessActivity,
+      refreshServerAndCi,
+      serverConfig?.githubConfigured,
+      telemetry.modelName,
+    ]
+  );
+
+  // Global keyboard shortcuts (Escape, Alt+Ctrl+Q, F12 repo-first capture)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -560,12 +648,15 @@ export function App() {
         setQuadView((prev) => !prev);
       } else if (e.key === 'F12') {
         e.preventDefault();
-        viewportRef.current?.captureSnapshot(true);
+        const dataUrl = viewportRef.current?.captureSnapshot(false);
+        if (dataUrl) {
+          handleCaptureViewportToRepo(dataUrl, 'viewport');
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [handleCaptureViewportToRepo]);
 
   // Top-bar mode switcher (Inspect, World, LookDev, Pipeline)
   const handleSelectWorkspaceMode = (mode: WorkspaceModeId) => {
@@ -630,11 +721,16 @@ export function App() {
                 ? 'side'
                 : s.name.includes('top')
                   ? 'top'
-                  : 'hero',
+                  : s.name.includes('camera')
+                    ? 'camera'
+                    : s.name.includes('viewport')
+                      ? 'viewport'
+                      : 'hero',
             label: s.name.replace(/\.[^.]+$/, ''),
             dataUrl: s.url,
             createdAt: item.updatedAt || new Date().toISOString(),
             githubPath: s.path,
+            isLatest: isLatestScreenshotFilename(s.name),
             source: 'github',
           }));
           setRealCaptures(loadedShots);
@@ -779,13 +875,13 @@ export function App() {
           modelSlug: slug,
           displayName: telemetry.modelName || slug,
           group,
-          modelFileName: filename,
-          modelBase64,
+          fileName: filename,
+          contentBase64: modelBase64,
           buildPy: buildPyCode,
-          textures: extractedTextures.map((t) => ({ name: t.name, base64: t.base64 })),
+          textures: extractedTextures.map((t) => ({ name: t.name, contentBase64: t.base64 })),
           screenshots: shots.map((s) => ({
-            name: `${s.angle}.png`,
-            base64: s.dataUrl.split(',')[1] || '',
+            name: buildLatestScreenshotFilename(s.angle),
+            contentBase64: s.dataUrl.split(',')[1] || '',
           })),
           commitMessage: `Save organized model bundle models/${slug}/ (${group})`,
         }),
@@ -798,7 +894,7 @@ export function App() {
       pushHarnessActivity(
         'screenshot',
         `Saved models/${slug}/ Bundle`,
-        `Committed mesh, ${extractedTextures.length} textures, and ${shots.length} multi-angle screenshots.`,
+        `Committed mesh, ${extractedTextures.length} textures, and ${shots.length} latest_* screenshots.`,
         'completed',
         slug
       );
@@ -827,9 +923,9 @@ export function App() {
           modelSlug: params.slug,
           displayName: params.slug,
           group: params.group,
-          modelFileName: params.filename,
-          modelBase64,
-          textures: extractedTextures.map((t) => ({ name: t.name, base64: t.base64 })),
+          fileName: params.filename,
+          contentBase64: modelBase64,
+          textures: extractedTextures.map((t) => ({ name: t.name, contentBase64: t.base64 })),
           commitMessage: `Save converted ${params.filename} to models/${params.slug}/`,
         }),
       }
@@ -841,7 +937,7 @@ export function App() {
     await refreshServerAndCi();
   };
 
-  // Capture 4 real viewport screenshots right now (local Vision QA)
+  // Capture 4 real viewport screenshots right now (local Vision QA — zero auto-download)
   const handleCaptureMultiAngleSheet = useCallback(() => {
     const shots = viewportRef.current?.captureMultiAngleScreenshots() || [];
     if (shots.length === 0) {
@@ -854,14 +950,14 @@ export function App() {
     pushHarnessActivity(
       'screenshot',
       'Captured 4-Angle Viewport Sheet',
-      'Rendered live Hero, Front, Side, and Top screenshots for Vision QA.',
+      'Rendered live latest_hero, latest_front, latest_side, and latest_top views for Vision QA.',
       'completed',
       activeModelSlug
     );
-    notify('Captured 4 real multi-angle viewport screenshots');
+    notify('Captured 4 real multi-angle screenshots (latest_*.png ready)');
   }, [activeModelSlug, notify, pushHarnessActivity]);
 
-  // Capture 4 real angles AND upload them straight to GitHub models/<slug>/screenshots/ for AI harnesses!
+  // Capture 4 real angles AND upload them straight to GitHub models/<slug>/screenshots/latest_*.png for AI harnesses!
   const handleCaptureAndStoreScreenshots = useCallback(async () => {
     const shots = viewportRef.current?.captureMultiAngleScreenshots() || [];
     if (shots.length === 0) {
@@ -875,6 +971,7 @@ export function App() {
     const slug = sanitizeModelSlug(activeModelSlug || telemetry.modelName || 'model');
     const res = await fetchJsonSafe<{
       stored?: boolean;
+      uploaded?: boolean;
       screenshots?: Array<{ name: string; path: string }>;
       error?: string;
     }>(`/api/harness/models/${encodeURIComponent(slug)}/screenshots`, {
@@ -882,25 +979,25 @@ export function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         screenshots: shots.map((s) => ({
-          name: `${s.angle}.png`,
-          base64: s.dataUrl.split(',')[1] || '',
+          name: buildLatestScreenshotFilename(s.angle),
+          contentBase64: s.dataUrl.split(',')[1] || '',
         })),
-        commitMessage: `Store 4-angle viewport screenshots for models/${slug}/`,
+        commitMessage: `Update 4-angle latest_* screenshots for models/${slug}/`,
       }),
     });
 
-    if (!res.ok || !res.data?.stored) {
-      notify(res.data?.error || 'GitHub not configured; screenshots kept in local Vision QA');
+    if (!res.ok || (!res.data?.stored && !res.data?.uploaded)) {
+      notify(res.data?.error || 'GitHub not configured; latest_*.png kept in local Vision QA');
       return;
     }
     pushHarnessActivity(
       'screenshot',
-      `Stored 4 Screenshots in models/${slug}/screenshots/`,
-      'External AI harnesses can now fetch these views via GET /api/harness/models/' + slug,
+      `Stored 4 latest_* Shots in models/${slug}/screenshots/`,
+      'External AI harnesses can fetch latest views via GET /api/harness/models/' + slug,
       'completed',
       slug
     );
-    notify(`Stored 4 screenshots in GitHub models/${slug}/screenshots/`);
+    notify(`Stored latest_hero/front/side/top.png in models/${slug}/screenshots/`);
     await refreshServerAndCi();
   }, [activeModelSlug, notify, pushHarnessActivity, refreshServerAndCi, telemetry.modelName]);
 
@@ -1164,7 +1261,7 @@ export function App() {
     const res = await fetchJsonSafe<{ committed?: boolean; error?: string }>('/api/github/file', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath, content, message }),
+      body: JSON.stringify({ path: filePath, content, commitMessage: message }),
     });
     if (!res.ok || !res.data?.committed) {
       notify(res.data?.error || 'Unable to commit file to GitHub');
@@ -1175,6 +1272,13 @@ export function App() {
     }
     notify(`Committed ${filePath} to GitHub`);
     await refreshGithubWorkspace();
+  };
+
+  const handleOpenAgentManual = () => {
+    setInspectorOpen(false);
+    setWorkbenchOpen(true);
+    setWorkbenchTab('workspace');
+    handleSelectWorkspaceFile('AGENTS.md');
   };
 
   const handleRequestExecutionMode = (mode: ExecutionMode) => {
@@ -1292,7 +1396,7 @@ export function App() {
         shotsToSend = fresh;
       }
 
-      const encodedImages: Array<{ label: string; base64: string; mimeType: string }> = [];
+      const encodedImages: Array<{ label: string; imageBase64: string; mimeType: string }> = [];
       for (const s of shotsToSend) {
         if (s.dataUrl.startsWith('data:')) {
           const [meta, b64] = s.dataUrl.split(',');
@@ -1300,7 +1404,7 @@ export function App() {
           if (b64) {
             encodedImages.push({
               label: s.label,
-              base64: b64,
+              imageBase64: b64,
               mimeType: mimeMatch?.[1] || 'image/png',
             });
           }
@@ -1310,7 +1414,7 @@ export function App() {
             const buf = await res.arrayBuffer();
             encodedImages.push({
               label: s.label,
-              base64: arrayBufferToBase64(buf),
+              imageBase64: arrayBufferToBase64(buf),
               mimeType: res.headers.get('content-type') || 'image/png',
             });
           } catch {
@@ -1511,7 +1615,7 @@ export function App() {
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#2D5A4C] px-2.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#22453A] sm:px-3.5 sm:text-[12.5px]"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>Export</span>
+            <span className="hidden sm:inline">Export</span>
           </button>
         </div>
       </header>
@@ -1576,6 +1680,11 @@ export function App() {
           onAnimationTimeChange={(timeSec, playing) => {
             setAnimationTime(timeSec);
             setAnimationPlaying(playing);
+          }}
+          onSelectedLightChange={setSelectedLightInfo}
+          onSelectedCameraChange={setSelectedCameraInfo}
+          onCaptureViewportToRepo={(dataUrl, angle) => {
+            handleCaptureViewportToRepo(dataUrl, angle);
           }}
         />
 
@@ -1650,6 +1759,21 @@ export function App() {
             viewportRef.current?.setBoneRotation(uuid, axis, deg)
           }
           onResetPose={() => viewportRef.current?.resetPose()}
+          selectedLightInfo={selectedLightInfo}
+          selectedCameraInfo={selectedCameraInfo}
+          onUpdateLightProperties={(uuid, patch) =>
+            viewportRef.current?.updateLightProperties(uuid, patch)
+          }
+          onUpdateCameraProperties={(uuid, patch) =>
+            viewportRef.current?.updateCameraProperties(uuid, patch)
+          }
+          onSetActiveSceneCamera={(uuid) => viewportRef.current?.setActiveSceneCamera(uuid)}
+          onToggleLookThroughCamera={(uuid) => viewportRef.current?.toggleLookThroughCamera(uuid)}
+          onAlignCameraToView={(uuid) => viewportRef.current?.alignCameraToCurrentView(uuid)}
+          onCaptureCameraToRepo={() => {
+            const shot = viewportRef.current?.captureActiveCameraSnapshot();
+            if (shot) handleCaptureViewportToRepo(shot, 'camera');
+          }}
         />
 
         {/* ON-DEMAND PIPELINE & AI HARNESS WORKBENCH (Zero Chatbox!) */}
@@ -1675,6 +1799,7 @@ export function App() {
           onSaveBundleToGithub={handleSaveActiveStageToGithub}
           onCaptureAndStoreScreenshots={handleCaptureAndStoreScreenshots}
           onSyncHarnessNow={handleSyncHarnessNow}
+          onOpenAgentManual={handleOpenAgentManual}
           realCaptures={realCaptures}
           compareAId={compareAId}
           compareBId={compareBId}
@@ -1784,6 +1909,11 @@ export function App() {
         onClose={() => setExportOpen(false)}
         onOpenConverter={() => setConverterOpen(true)}
         onDownloadFormat={handleDownloadFormat}
+        onSaveViewportToRepo={async () => {
+          const dataUrl = viewportRef.current?.captureSnapshot(false);
+          if (!dataUrl) throw new Error('Unable to capture viewport frame.');
+          await handleCaptureViewportToRepo(dataUrl, 'viewport');
+        }}
         onBuildBlendViaCloudCi={handleBuildBlendViaCloudCi}
         onPushBundleToGithub={handleSaveActiveStageToGithub}
         onBackupBundleToDrive={handleBackupActiveBundleToDrive}
@@ -1803,9 +1933,9 @@ export function App() {
       {/* 2FA LOCAL BLENDER BRIDGE MODAL */}
       <TwoFactorModal
         open={twoFactorOpen}
-        currentEndpoint={localBlenderEndpoint}
-        onCancel={() => setTwoFactorOpen(false)}
-        onConfirm={(endpoint) => {
+        currentLocalEndpoint={localBlenderEndpoint}
+        onClose={() => setTwoFactorOpen(false)}
+        onApproved={(endpoint) => {
           setLocalBlenderEndpoint(endpoint);
           setExecutionMode('local');
           setTwoFactorOpen(false);

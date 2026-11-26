@@ -241,8 +241,8 @@
 
 /* Subtle architectural scrollbars */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -250,12 +250,45 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(132, 126, 117, 0.3);
+  background: rgba(132, 126, 117, 0.35);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(45, 90, 76, 0.55);
+  background: rgba(45, 90, 76, 0.6);
+}
+
+/* Always-clear architectural scrollbar for modal catalogs & lists */
+.atelier-scrollbar {
+  scrollbar-gutter: stable;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .atelier-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #A8A095 #EFECE6;
+  }
+}
+
+.atelier-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.atelier-scrollbar::-webkit-scrollbar-track {
+  background: #EFECE6;
+  border-radius: 999px;
+}
+
+.atelier-scrollbar::-webkit-scrollbar-thumb {
+  background: #A8A095;
+  border: 2px solid #EFECE6;
+  border-radius: 999px;
+  min-height: 36px;
+}
+
+.atelier-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #2D5A4C;
 }
 
 .no-scrollbar::-webkit-scrollbar {

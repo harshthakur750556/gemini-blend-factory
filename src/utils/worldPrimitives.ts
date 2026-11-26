@@ -1,14 +1,253 @@
 import * as THREE from 'three';
-import type { WorldPrimitiveKind } from '../types';
+import type { SceneLightKind, WorldPrimitiveKind } from '../types';
+
+/**
+ * Converts a Blender 36x24mm full-frame focal length (mm) to Three.js vertical FOV (degrees).
+ */
+export function focalLengthMmToFovDeg(focalMm: number, sensorHeightMm = 24): number {
+  const safeFocal = Math.max(8, Math.min(300, Number.isFinite(focalMm) ? focalMm : 50));
+  const rad = 2 * Math.atan(sensorHeightMm / (2 * safeFocal));
+  return Number(THREE.MathUtils.radToDeg(rad).toFixed(2));
+}
+
+/**
+ * Converts Three.js vertical FOV (degrees) back to Blender 36x24mm full-frame focal length (mm).
+ */
+export function fovDegToFocalLengthMm(fovDeg: number, sensorHeightMm = 24): number {
+  const safeFov = Math.max(5, Math.min(135, Number.isFinite(fovDeg) ? fovDeg : 27));
+  const rad = THREE.MathUtils.degToRad(safeFov);
+  const focal = sensorHeightMm / (2 * Math.tan(rad / 2));
+  return Number(focal.toFixed(1));
+}
+
+function markAsEditorHelper(obj: THREE.Object3D): void {
+  obj.userData.isEditorHelper = true;
+  obj.traverse((c) => {
+    c.userData.isEditorHelper = true;
+    c.castShadow = false;
+    c.receiveShadow = false;
+  });
+}
+
+function createDashedRing(radius: number, color: string, plane: 'xy' | 'xz' | 'yz'): THREE.LineLoop {
+  const pts: THREE.Vector3[] = [];
+  const segs = 32;
+  for (let i = 0; i < segs; i++) {
+    const a = (i / segs) * Math.PI * 2;
+    const c = Math.cos(a) * radius;
+    const s = Math.sin(a) * radius;
+    if (plane === 'xy') pts.push(new THREE.Vector3(c, s, 0));
+    else if (plane === 'xz') pts.push(new THREE.Vector3(c, 0, s));
+    else pts.push(new THREE.Vector3(0, c, s));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.72 });
+  return new THREE.LineLoop(geo, mat);
+}
+
+/**
+ * Rebuilds the wireframe cone helper inside a Blender-style Spot Light group.
+ */
+export function rebuildSpotLightConeHelper(group: THREE.Object3D): void {
+  const existing = group.getObjectByName('__SpotConeHelper');
+  if (existing) {
+    group.remove(existing);
+    existing.traverse((o) => {
+      if ((o as THREE.LineSegments).isLineSegments) {
+        (o as THREE.LineSegments).geometry.dispose();
+        ((o as THREE.LineSegments).material as THREE.Material).dispose();
+      }
+    });
+  }
+
+  const spot = group.children.find((c) => (c as THREE.SpotLight).isSpotLight) as THREE.SpotLight | undefined;
+  const angle = spot ? spot.angle : Math.PI / 5;
+  const len = Math.min(3.2, Math.max(1.1, (spot?.distance || 8) * 0.24));
+  const radius = Math.tan(Math.min(Math.PI / 2.2, angle)) * len;
+  const col = spot ? `#${spot.color.getHexString()}` : '#B8863B';
+
+  const verts: number[] = [];
+  const segs = 24;
+  for (let i = 0; i < segs; i++) {
+    const a0 = (i / segs) * Math.PI * 2;
+    const a1 = ((i + 1) / segs) * Math.PI * 2;
+    const x0 = Math.cos(a0) * radius;
+    const z0 = Math.sin(a0) * radius;
+    const x1 = Math.cos(a1) * radius;
+    const z1 = Math.sin(a1) * radius;
+    // Rim circle at y = -len
+    verts.push(x0, -len, z0, x1, -len, z1);
+    // 4 primary cone ribs
+    if (i % 6 === 0) {
+      verts.push(0, 0, 0, x0, -len, z0);
+    }
+  }
+  // Center aim axis
+  verts.push(0, 0, 0, 0, -len * 1.12, 0);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  const lines = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.78 })
+  );
+  lines.name = '__SpotConeHelper';
+  markAsEditorHelper(lines);
+  group.add(lines);
+}
+
+/**
+ * Rebuilds the rectangular softbox frame helper inside a Blender-style Area Light group.
+ */
+export function rebuildAreaLightFrameHelper(group: THREE.Object3D, width: number, height: number, colorHex: string): void {
+  const existing = group.getObjectByName('__AreaFrameHelper');
+  if (existing) {
+    group.remove(existing);
+    existing.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh || (o as THREE.LineSegments).isLineSegments) {
+        (o as THREE.Mesh).geometry.dispose();
+        const m = (o as THREE.Mesh).material;
+        if (Array.isArray(m)) m.forEach((x) => x.dispose());
+        else m.dispose();
+      }
+    });
+  }
+
+  const hw = Math.max(0.15, width) * 0.5;
+  const hh = Math.max(0.15, height) * 0.5;
+  const holder = new THREE.Group();
+  holder.name = '__AreaFrameHelper';
+
+  // Soft translucent emitter pane facing -Z (Three.js RectAreaLight shines along -Z)
+  const pane = new THREE.Mesh(
+    new THREE.PlaneGeometry(hw * 2, hh * 2),
+    new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.24,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  holder.add(pane);
+
+  // Outer rectangle + normal direction stem pointing along -Z
+  const pts = [
+    -hw, -hh, 0,  hw, -hh, 0,
+     hw, -hh, 0,  hw,  hh, 0,
+     hw,  hh, 0, -hw,  hh, 0,
+    -hw,  hh, 0, -hw, -hh, 0,
+      0,   0, 0,   0,   0, -0.75,
+  ];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const frame = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ color: '#B8863B', transparent: true, opacity: 0.9 })
+  );
+  holder.add(frame);
+
+  markAsEditorHelper(holder);
+  group.add(holder);
+}
+
+/**
+ * Rebuilds the iconic Blender-style Camera frustum pyramid + top orientation triangle.
+ */
+export function rebuildCameraFrustumHelper(group: THREE.Object3D, fovDeg: number, isActive = false): void {
+  const existing = group.getObjectByName('__CameraFrustumHelper');
+  if (existing) {
+    group.remove(existing);
+    existing.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh || (o as THREE.LineSegments).isLineSegments) {
+        (o as THREE.Mesh).geometry.dispose();
+        const m = (o as THREE.Mesh).material;
+        if (Array.isArray(m)) m.forEach((x) => x.dispose());
+        else m.dispose();
+      }
+    });
+  }
+
+  const holder = new THREE.Group();
+  holder.name = '__CameraFrustumHelper';
+
+  const depth = 0.62;
+  const aspect = 16 / 9;
+  const halfH = Math.min(0.45, Math.max(0.11, Math.tan(THREE.MathUtils.degToRad(fovDeg * 0.5)) * depth));
+  const halfW = halfH * aspect;
+
+  // Pyramid frustum pointing along -Z (standard Three.js PerspectiveCamera forward direction)
+  const verts = [
+    // Apex to 4 corners
+    0, 0, 0, -halfW,  halfH, -depth,
+    0, 0, 0,  halfW,  halfH, -depth,
+    0, 0, 0,  halfW, -halfH, -depth,
+    0, 0, 0, -halfW, -halfH, -depth,
+    // Front film-gate frame
+    -halfW,  halfH, -depth,  halfW,  halfH, -depth,
+     halfW,  halfH, -depth,  halfW, -halfH, -depth,
+     halfW, -halfH, -depth, -halfW, -halfH, -depth,
+    -halfW, -halfH, -depth, -halfW,  halfH, -depth,
+  ];
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  const strokeColor = isActive ? '#2D5A4C' : '#5A564F';
+  const frustumLines = new THREE.LineSegments(
+    lineGeo,
+    new THREE.LineBasicMaterial({ color: strokeColor, transparent: true, opacity: 0.92 })
+  );
+  holder.add(frustumLines);
+
+  // Blender-style upward orientation triangle above the camera lens frame (filled when active!)
+  const triW = halfW * 0.56;
+  const triBaseY = halfH + 0.04;
+  const triTipY = triBaseY + Math.max(0.11, halfH * 0.48);
+  const triGeo = new THREE.BufferGeometry();
+  triGeo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [-triW, triBaseY, -depth, triW, triBaseY, -depth, 0, triTipY, -depth],
+      3
+    )
+  );
+  triGeo.computeVertexNormals();
+  const upTriangle = new THREE.Mesh(
+    triGeo,
+    new THREE.MeshBasicMaterial({
+      color: isActive ? '#2D5A4C' : '#847E75',
+      wireframe: !isActive,
+      side: THREE.DoubleSide,
+    })
+  );
+  holder.add(upTriangle);
+
+  // Subtle camera body proxy box behind apex so raycast clicking is effortless
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.12, 0.18),
+    new THREE.MeshStandardMaterial({
+      color: isActive ? '#2D5A4C' : '#3B3935',
+      roughness: 0.45,
+      metalness: 0.2,
+    })
+  );
+  body.position.set(0, 0, 0.09);
+  holder.add(body);
+
+  markAsEditorHelper(holder);
+  group.add(holder);
+}
 
 /**
  * Creates Blender-inspired architectural & 3D world-building primitives, terrain,
- * water planes, architectural prefabs, lights, and Unreal/Unity UCX collision volumes.
+ * water planes, architectural prefabs, full Blender Lights (Point, Sun, Spot, Area),
+ * Scene Cameras, and Unreal/Unity UCX collision volumes.
  */
 export function createWorldPrimitive(
   kind: WorldPrimitiveKind,
-  indexSuffix: number
+  indexSuffix: number,
+  options?: { isSoftwareGl?: boolean }
 ): THREE.Object3D {
+  const isSw = Boolean(options?.isSoftwareGl);
   const stoneMat = new THREE.MeshStandardMaterial({
     name: `Atelier_Stone_${indexSuffix}`,
     color: '#9C968B',
@@ -136,22 +375,151 @@ export function createWorldPrimitive(
     }
     case 'point-light': {
       const group = new THREE.Group();
-      group.name = `World_PointLight_${indexSuffix}`;
-      group.position.set(0, 1.4, 0);
+      group.name = `Point_Light_${indexSuffix}`;
+      group.position.set(0.9, 1.55, 0.9);
+      group.userData.studioElementType = 'light';
+      group.userData.lightKind = 'point' as SceneLightKind;
+
+      const helper = new THREE.Group();
+      helper.name = '__PointLightHelper';
       const bulb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 16, 12),
-        new THREE.MeshStandardMaterial({
-          name: `Lamp_Emitter_${indexSuffix}`,
-          color: '#FFF5E0',
-          emissive: new THREE.Color('#FFBE6B'),
-          emissiveIntensity: 2.2,
-          roughness: 0.2,
-        })
+        new THREE.SphereGeometry(0.085, 16, 12),
+        new THREE.MeshBasicMaterial({ color: '#FFCE8A' })
       );
-      bulb.name = `Light_Proxy_${indexSuffix}`;
-      const light = new THREE.PointLight('#FFCE8A', 2.4, 8, 1.6);
-      light.name = `Light_Emitter_${indexSuffix}`;
-      group.add(bulb, light);
+      bulb.name = '__LightBulbCore';
+      helper.add(
+        bulb,
+        createDashedRing(0.18, '#B8863B', 'xy'),
+        createDashedRing(0.18, '#B8863B', 'xz')
+      );
+      markAsEditorHelper(helper);
+
+      const light = new THREE.PointLight('#FFCE8A', 2.6, 10, 1.6);
+      light.name = `Point_Emitter_${indexSuffix}`;
+      light.castShadow = !isSw;
+      group.add(helper, light);
+      return group;
+    }
+    case 'sun-light': {
+      const group = new THREE.Group();
+      group.name = `Sun_Light_${indexSuffix}`;
+      group.position.set(2.2, 3.2, 1.8);
+      group.rotation.set(-0.55, 0.45, 0);
+      group.userData.studioElementType = 'light';
+      group.userData.lightKind = 'sun' as SceneLightKind;
+
+      const helper = new THREE.Group();
+      helper.name = '__SunLightHelper';
+      const core = new THREE.Mesh(
+        new THREE.SphereGeometry(0.11, 16, 12),
+        new THREE.MeshBasicMaterial({ color: '#FFE4A8' })
+      );
+      core.name = '__LightBulbCore';
+      const rayVerts: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        rayVerts.push(Math.cos(a) * 0.16, 0, Math.sin(a) * 0.16, Math.cos(a) * 0.28, 0, Math.sin(a) * 0.28);
+      }
+      // Parallel sun direction vector pointing straight down local -Y
+      rayVerts.push(0, 0, 0, 0, -1.35, 0);
+      rayVerts.push(-0.1, -0.1, 0, -0.1, -1.1, 0);
+      rayVerts.push(0.1, -0.1, 0, 0.1, -1.1, 0);
+      const rayGeo = new THREE.BufferGeometry();
+      rayGeo.setAttribute('position', new THREE.Float32BufferAttribute(rayVerts, 3));
+      const rays = new THREE.LineSegments(
+        rayGeo,
+        new THREE.LineBasicMaterial({ color: '#B8863B', transparent: true, opacity: 0.88 })
+      );
+      helper.add(core, rays);
+      markAsEditorHelper(helper);
+
+      const light = new THREE.DirectionalLight('#FFF3D6', 2.2);
+      light.name = `Sun_Emitter_${indexSuffix}`;
+      light.castShadow = !isSw;
+      const target = new THREE.Object3D();
+      target.name = '__LightTarget';
+      target.position.set(0, -2.5, 0);
+      light.target = target;
+      group.add(helper, light, target);
+      return group;
+    }
+    case 'spot-light': {
+      const group = new THREE.Group();
+      group.name = `Spot_Light_${indexSuffix}`;
+      group.position.set(1.4, 2.35, 1.3);
+      group.rotation.set(-0.42, 0.2, 0.35);
+      group.userData.studioElementType = 'light';
+      group.userData.lightKind = 'spot' as SceneLightKind;
+
+      const core = new THREE.Mesh(
+        new THREE.ConeGeometry(0.1, 0.18, 12),
+        new THREE.MeshBasicMaterial({ color: '#FFD9A0' })
+      );
+      core.name = '__LightBulbCore';
+      core.rotation.x = Math.PI;
+      markAsEditorHelper(core);
+
+      const light = new THREE.SpotLight('#FFD9A0', 4.5, 12, Math.PI / 5, 0.35, 1.5);
+      light.name = `Spot_Emitter_${indexSuffix}`;
+      light.castShadow = !isSw;
+      const target = new THREE.Object3D();
+      target.name = '__LightTarget';
+      target.position.set(0, -2.5, 0);
+      light.target = target;
+      group.add(core, light, target);
+      rebuildSpotLightConeHelper(group);
+      return group;
+    }
+    case 'area-light': {
+      const group = new THREE.Group();
+      group.name = `Area_Light_${indexSuffix}`;
+      group.position.set(-1.5, 1.85, 1.35);
+      // RectAreaLight emits along local -Z, so use camera-style Matrix4.lookAt
+      const areaLook = new THREE.Matrix4().lookAt(
+        group.position,
+        new THREE.Vector3(0, 0.65, 0),
+        new THREE.Vector3(0, 1, 0)
+      );
+      group.quaternion.setFromRotationMatrix(areaLook);
+      group.userData.studioElementType = 'light';
+      group.userData.lightKind = 'area' as SceneLightKind;
+      group.userData.areaWidth = 1.4;
+      group.userData.areaHeight = 0.9;
+
+      if (!isSw) {
+        const rectLight = new THREE.RectAreaLight('#FFF6E8', 4.2, 1.4, 0.9);
+        rectLight.name = `Area_Emitter_${indexSuffix}`;
+        group.add(rectLight);
+      } else {
+        // Calibrated software-WebGL safe fill proxy so CPU render stays instant
+        const proxy = new THREE.PointLight('#FFF6E8', 2.4, 9, 1.5);
+        proxy.name = `Area_Emitter_${indexSuffix}`;
+        group.add(proxy);
+      }
+      rebuildAreaLightFrameHelper(group, 1.4, 0.9, '#FFF6E8');
+      return group;
+    }
+    case 'scene-camera': {
+      const group = new THREE.Group();
+      group.name = `Scene_Camera_${indexSuffix}`;
+      // Left-front 3/4 hero position so the frustum sits cleanly in view without blocking the main orbit lens
+      group.position.set(-2.4, 1.5, 2.55);
+      // PerspectiveCamera & frustum helper face local -Z, so use Matrix4.lookAt
+      const camLook = new THREE.Matrix4().lookAt(
+        group.position,
+        new THREE.Vector3(0, 0.72, 0),
+        new THREE.Vector3(0, 1, 0)
+      );
+      group.quaternion.setFromRotationMatrix(camLook);
+      group.userData.studioElementType = 'camera';
+      const defaultFocalMm = 50;
+      const defaultFov = focalLengthMmToFovDeg(defaultFocalMm);
+      group.userData.focalLengthMm = defaultFocalMm;
+
+      const cam = new THREE.PerspectiveCamera(defaultFov, 16 / 9, 0.08, 120);
+      cam.name = `Camera_Lens_${indexSuffix}`;
+      group.add(cam);
+      rebuildCameraFrustumHelper(group, defaultFov, false);
       return group;
     }
     case 'collider': {
@@ -270,7 +638,7 @@ export async function extractTexturesFromObject3D(
 
   const tasks: Array<Promise<void>> = [];
   root.traverse((obj) => {
-    if (!(obj as THREE.Mesh).isMesh) return;
+    if (!(obj as THREE.Mesh).isMesh || obj.userData?.isEditorHelper) return;
     const mats = Array.isArray((obj as THREE.Mesh).material)
       ? ((obj as THREE.Mesh).material as THREE.Material[])
       : [(obj as THREE.Mesh).material];

@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  BookOpen,
   Camera,
   CheckCircle2,
   CloudUpload,
@@ -55,6 +56,7 @@ interface WorkbenchSheetProps {
   onSaveBundleToGithub: (group: ModelGroupName) => Promise<void>;
   onCaptureAndStoreScreenshots: () => Promise<void>;
   onSyncHarnessNow: () => Promise<void>;
+  onOpenAgentManual: () => void;
   // Real Vision QA props (zero static fake images!)
   realCaptures: CapturedScreenshot[];
   compareAId: string | null;
@@ -115,6 +117,7 @@ export const WorkbenchSheet: React.FC<WorkbenchSheetProps> = ({
   onSaveBundleToGithub,
   onCaptureAndStoreScreenshots,
   onSyncHarnessNow,
+  onOpenAgentManual,
   realCaptures,
   compareAId,
   compareBId,
@@ -277,12 +280,19 @@ export const WorkbenchSheet: React.FC<WorkbenchSheetProps> = ({
               </button>
             </div>
             <p className="text-[11.5px] leading-relaxed text-[#4C5C56]">
-              External AI harnesses (AI Studio, CLI agents, scripts) submit models or{' '}
-              <span className="font-mono">build.py</span> to GitHub{' '}
-              <span className="font-mono">models/&lt;slug&gt;/</span>, preview 4-angle screenshots
-              stored inside <span className="font-mono">models/&lt;slug&gt;/screenshots/</span>, and
-              reform geometry in real time.
+              External AI harnesses submit models or <span className="font-mono">build.py</span> to{' '}
+              <span className="font-mono">models/&lt;slug&gt;/</span>, read{' '}
+              <span className="font-mono">screenshots/latest_*.png</span> +{' '}
+              <span className="font-mono">manifest.json</span>, and reform geometry in real time.
             </p>
+            <button
+              type="button"
+              onClick={onOpenAgentManual}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#C9DBD3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#1D4438] transition-colors hover:bg-[#EBF2EF]"
+            >
+              <BookOpen className="h-3.5 w-3.5 text-[#2D5A4C]" />
+              Open AGENTS.md Operating Manual
+            </button>
           </div>
 
           {/* Active Model Subfolder Target */}
@@ -489,16 +499,14 @@ export const WorkbenchSheet: React.FC<WorkbenchSheetProps> = ({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] font-medium text-[#5A564F]">
                   <span>Real Captured Angles ({realCaptures.length})</span>
-                  {githubConfigured && (
-                    <button
-                      type="button"
-                      onClick={onCaptureAndStoreScreenshots}
-                      className="inline-flex items-center gap-1 text-[#2D5A4C] hover:underline"
-                    >
-                      <CloudUpload className="h-3 w-3" />
-                      Store in models/{activeModelSlug}/screenshots/
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={onCaptureAndStoreScreenshots}
+                    className="inline-flex items-center gap-1 text-[#2D5A4C] hover:underline"
+                  >
+                    <CloudUpload className="h-3 w-3" />
+                    Save latest_*.png to Repo
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-4 gap-1.5">

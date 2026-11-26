@@ -39,7 +39,39 @@ export type WorldPrimitiveKind =
   | 'terrain'
   | 'water'
   | 'point-light'
+  | 'sun-light'
+  | 'spot-light'
+  | 'area-light'
+  | 'scene-camera'
   | 'collider';
+
+export type SceneLightKind = 'point' | 'sun' | 'spot' | 'area';
+
+export interface SelectedLightInfo {
+  uuid: string;
+  name: string;
+  lightKind: SceneLightKind;
+  color: string;
+  intensity: number;
+  distance: number;
+  decay: number;
+  angleDeg: number;
+  penumbra: number;
+  width: number;
+  height: number;
+  castShadow: boolean;
+}
+
+export interface SelectedCameraInfo {
+  uuid: string;
+  name: string;
+  focalLengthMm: number;
+  fov: number;
+  near: number;
+  far: number;
+  isActiveCamera: boolean;
+  lookingThrough: boolean;
+}
 
 export type WorkspaceModeId = 'inspect' | 'world' | 'lookdev' | 'pipeline';
 
@@ -100,11 +132,12 @@ export interface TopologyDiagnostics {
 
 export interface CapturedScreenshot {
   id: string;
-  angle: 'hero' | 'front' | 'side' | 'top' | 'cycles' | 'custom';
+  angle: 'hero' | 'front' | 'side' | 'top' | 'camera' | 'viewport' | 'cycles' | 'custom';
   label: string;
   dataUrl: string;
   createdAt: string;
   githubPath?: string;
+  isLatest?: boolean;
   source: 'viewport' | 'cycles' | 'github';
 }
 
@@ -155,7 +188,9 @@ export interface AvailableModelItem {
 export interface OutlinerNode {
   uuid: string;
   name: string;
-  type: 'Mesh' | 'SkinnedMesh' | 'Bone' | 'Group' | 'Light';
+  type: 'Mesh' | 'SkinnedMesh' | 'Bone' | 'Group' | 'Light' | 'Camera';
+  lightKind?: SceneLightKind;
+  isActiveCamera?: boolean;
   depth: number;
   visible: boolean;
   locked: boolean;

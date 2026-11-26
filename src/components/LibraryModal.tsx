@@ -254,14 +254,14 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1C1B19]/35 p-4 animate-atelier-fade"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#1C1B19]/35 p-3 sm:p-4 animate-atelier-fade"
       role="dialog"
       aria-modal="true"
       aria-labelledby="library-modal-title"
     >
-      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[#E5E1DA] bg-white shadow-[0_24px_64px_-16px_rgba(28,27,25,0.22)] animate-atelier-modal">
+      <div className="flex h-[min(88vh,820px)] max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-[#E5E1DA] bg-white shadow-[0_24px_64px_-16px_rgba(28,27,25,0.22)] animate-atelier-modal">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-[#EFECE6] px-6 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#EFECE6] px-6 py-4">
           <div className="flex items-center gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF2EF] text-[#2D5A4C]">
               <Layers className="h-4.5 w-4.5" />
@@ -312,7 +312,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         </div>
 
         {/* Actions Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-[#EFECE6] bg-[#FAF9F6] px-6 py-3">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-[#EFECE6] bg-[#FAF9F6] px-6 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -439,7 +439,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         </div>
 
         {/* Selective / Group Google Drive Copy Banner */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#EFECE6] bg-[#F7F6F2] px-6 py-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#EFECE6] bg-[#F7F6F2] px-6 py-2">
           <div className="flex items-center gap-3 text-[12px]">
             <button
               type="button"
@@ -478,7 +478,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         </div>
 
         {/* Group Tabs & Search */}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#EFECE6] px-6 py-2.5">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#EFECE6] px-6 py-2.5">
           <div className="flex flex-wrap items-center gap-1">
             {tabs.map((tab) => (
               <button
@@ -521,8 +521,8 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
           </div>
         </div>
 
-        {/* Asset Cards */}
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        {/* Asset Cards — Scrollable Region */}
+        <div className="atelier-scrollbar min-h-0 flex-1 overflow-y-scroll px-5 py-4 sm:px-6 sm:py-5">
           {filteredModels.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#DDD8CF] bg-[#FAF9F6] py-12 text-center">
               <Layers className="h-6 w-6 text-[#A29B90]" />
@@ -682,7 +682,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         </div>
 
         {githubSlug && (
-          <div className="flex items-center justify-between border-t border-[#EFECE6] bg-[#FAF9F6] px-6 py-2.5 text-[11px] text-[#6E6960]">
+          <div className="flex shrink-0 items-center justify-between border-t border-[#EFECE6] bg-[#FAF9F6] px-6 py-2.5 text-[11px] text-[#6E6960]">
             <span>
               Default GitHub Model Storage:{' '}
               <span className="font-mono text-[#1C1B19]">{githubSlug}/models/&lt;slug&gt;/</span>

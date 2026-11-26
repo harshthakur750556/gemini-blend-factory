@@ -198,12 +198,138 @@ test('validateModelUpload sanitizes valid 3D model names and rejects unsafe type
 test('export helpers sanitize filenames and emit valid Blender 4.2 reconstruction scripts', async () => {
   const { formatExportFilename, buildBlenderReconstructionScript } = await import('./modelExporters');
   assert.equal(formatExportFilename('Apex Titan Mk4 (Final).glb', '.obj'), 'Apex_Titan_Mk4_Final.obj');
-  assert.equal(formatExportFilename('   ', 'stl'), 'apex-model.stl');
+  assert.equal(formatExportFilename('   ', 'stl'), 'studio-model.stl');
 
   const script = buildBlenderReconstructionScript('Apex_Titan_Mk4', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
   assert.match(script, /bpy\.ops\.wm\.read_factory_settings\(use_empty=True\)/);
   assert.match(script, /bpy\.ops\.wm\.obj_import/);
   assert.match(script, /Principled BSDF/);
+});
+
+test('pathSafety latest_* screenshot naming, manifest block, and subfolder paths work strictly', async () => {
+  const {
+    sanitizeModelSlug,
+    validateModelSlug,
+    validateScreenshotFilename,
+    validateTextureFilename,
+    buildModelSubfolderPaths,
+    buildLatestScreenshotFilename,
+    isLatestScreenshotFilename,
+    buildLatestScreenshotsManifest,
+  } = await import('./pathSafety');
+
+  assert.equal(sanitizeModelSlug('Stone & Cedar Lantern.glb'), 'stone-cedar-lantern');
+  assert.equal(validateModelSlug('stone-cedar-lantern'), true);
+  assert.equal(validateModelSlug('../escape'), false);
+
+  assert.equal(validateScreenshotFilename('latest_hero.png'), true);
+  assert.equal(validateScreenshotFilename('../evil.png'), false);
+  assert.equal(validateTextureFilename('cedar_albedo.png'), true);
+  assert.equal(validateTextureFilename('script.js'), false);
+
+  const sub = buildModelSubfolderPaths('stone-cedar-lantern');
+  assert.equal(sub.folder, 'models/stone-cedar-lantern');
+  assert.equal(sub.screenshotsDir, 'models/stone-cedar-lantern/screenshots');
+  assert.equal(sub.manifest, 'models/stone-cedar-lantern/manifest.json');
+
+  assert.equal(buildLatestScreenshotFilename('hero'), 'latest_hero.png');
+  assert.equal(buildLatestScreenshotFilename('latest_camera.png'), 'latest_camera.png');
+  assert.equal(buildLatestScreenshotFilename('Viewport'), 'latest_viewport.png');
+  assert.equal(isLatestScreenshotFilename('latest_front.png'), true);
+  assert.equal(isLatestScreenshotFilename('hero.png'), false);
+
+  const m1 = buildLatestScreenshotsManifest({
+    savedPaths: [
+      'models/stone-cedar-lantern/screenshots/latest_hero.png',
+      'models/stone-cedar-lantern/screenshots/latest_camera.png',
+    ],
+  });
+  assert.equal(m1.revision, 1);
+  assert.equal(m1.latestPrimary, 'models/stone-cedar-lantern/screenshots/latest_camera.png');
+  assert.equal(
+    m1.files.find((f) => f.angle === 'hero')?.path,
+    'models/stone-cedar-lantern/screenshots/latest_hero.png'
+  );
+
+  const m2 = buildLatestScreenshotsManifest({
+    existing: m1,
+    savedPaths: ['models/stone-cedar-lantern/screenshots/latest_viewport.png'],
+  });
+  assert.equal(m2.revision, 2);
+  assert.equal(m2.latestPrimary, 'models/stone-cedar-lantern/screenshots/latest_viewport.png');
+  assert.equal(
+    m2.files.find((f) => f.angle === 'hero')?.path,
+    'models/stone-cedar-lantern/screenshots/latest_hero.png'
+  );
+});
+
+test('validateModelUpload supports expanded CAD and game engine extensions', () => {
+  for (const name of ['rig.fbx', 'scene.dae', 'print.3mf', 'mesh.amf', 'poly.off', 'cad.dxf', 'asset.gltf']) {
+    const res = validateModelUpload(name, 2048);
+    assert.equal(res.valid, true, `Expected ${name} to be valid`);
+  }
+});
+
+test('Blender Lights, Scene Camera focal length math, and editor helper exclusion work reliably', async () => {
+  const THREE = await import('three');
+  const {
+    createWorldPrimitive,
+    focalLengthMmToFovDeg,
+    fovDegToFocalLengthMm,
+  } = await import('./worldPrimitives');
+  const { exportObject3DToBlob } = await import('./modelExporters');
+
+  const fov50 = focalLengthMmToFovDeg(50);
+  assert.ok(fov50 > 26 && fov50 < 28, `Expected 50mm vertical FOV ~27 deg, got ${fov50}`);
+  const roundTrip = fovDegToFocalLengthMm(fov50);
+  assert.ok(Math.abs(roundTrip - 50) < 0.05);
+
+  const point = createWorldPrimitive('point-light', 1);
+  const sun = createWorldPrimitive('sun-light', 2);
+  const spot = createWorldPrimitive('spot-light', 3);
+  const areaGpu = createWorldPrimitive('area-light', 4, { isSoftwareGl: false });
+  const areaSw = createWorldPrimitive('area-light', 5, { isSoftwareGl: true });
+  const cam = createWorldPrimitive('scene-camera', 6);
+
+  assert.equal(point.userData.studioElementType, 'light');
+  assert.equal(point.userData.lightKind, 'point');
+  assert.equal(sun.userData.lightKind, 'sun');
+  assert.equal(spot.userData.lightKind, 'spot');
+  assert.equal(areaGpu.userData.lightKind, 'area');
+  assert.equal(areaSw.userData.lightKind, 'area');
+  assert.equal(cam.userData.studioElementType, 'camera');
+  assert.equal(cam.userData.focalLengthMm, 50);
+
+  // Verify editor helper meshes inside lights/cameras are excluded from ALL mesh exports
+  const stage = new THREE.Group();
+  const realCube = createWorldPrimitive('cube', 1);
+  stage.add(realCube, point, spot, areaGpu, cam);
+
+  const objExport = await exportObject3DToBlob(stage, 'obj', 'lantern-world');
+  const objText = await objExport.blob.text();
+  const vertexLines = objText.split('\n').filter((line) => line.startsWith('v '));
+  assert.equal(vertexLines.length, 24, `Expected only cube's 24 vertices, got ${vertexLines.length}`);
+  assert.doesNotMatch(objText, /__LightHelper|__CameraFrustumHelper|__SpotConeHelper/);
+
+  const stepExport = await exportObject3DToBlob(stage, 'step', 'lantern-world');
+  const stepText = await stepExport.blob.text();
+  assert.match(stepText, /ISO-10303-21;/);
+
+  const usdaExport = await exportObject3DToBlob(stage, 'usda', 'lantern-world');
+  const usdaText = await usdaExport.blob.text();
+  assert.match(usdaText, /#usda 1\.0/);
+});
+
+test('OFF and DXF geometry parsers reconstruct valid BufferGeometries', async () => {
+  const { parseOffToGeometry, parseDxf3dFacesToGeometry } = await import('./modelConverter');
+
+  const offGeo = parseOffToGeometry(`OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n`);
+  assert.equal(offGeo.getAttribute('position').count, 3);
+
+  const dxfGeo = parseDxf3dFacesToGeometry(
+    ['0', 'SECTION', '2', 'ENTITIES', '0', '3DFACE', '10', '0', '20', '0', '30', '0', '11', '1', '21', '0', '31', '0', '12', '0', '22', '1', '32', '0', '13', '0', '23', '1', '33', '0', '0', 'ENDSEC', '0', 'EOF'].join('\n')
+  );
+  assert.equal(dxfGeo.getAttribute('position').count, 3);
 });
 
 

@@ -106,6 +106,94 @@ export function buildModelSubfolderPaths(rawSlug: string): {
 }
 
 /**
+ * Generates an unambiguous `latest_<angle>.png` filename so any AI model or harness
+ * inspecting `models/<slug>/screenshots/` immediately recognizes the latest capture.
+ */
+export function buildLatestScreenshotFilename(rawAngle: string, ext: 'png' | 'jpg' | 'webp' = 'png'): string {
+  const cleaned = String(rawAngle || 'viewport')
+    .replace(/\.[a-z0-9]+$/i, '')
+    .toLowerCase()
+    .replace(/^latest[_-]+/, '')
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48);
+  const stem = cleaned || 'viewport';
+  return `latest_${stem}.${ext}`;
+}
+
+export function isLatestScreenshotFilename(fileName: string): boolean {
+  return typeof fileName === 'string' && /^latest_[a-z0-9_-]+\.(png|jpg|jpeg|webp)$/i.test(fileName);
+}
+
+export interface LatestScreenshotsManifestBlock {
+  updatedAt: string;
+  revision: number;
+  latestPrimary: string | null;
+  files: Array<{
+    name: string;
+    angle: string;
+    path: string;
+    updatedAt: string;
+  }>;
+}
+
+/**
+ * Merges newly saved `latest_*.png` paths into a manifest's `latestScreenshots` metadata block
+ * so external AI harnesses can read timestamp, revision, and exact latest file paths.
+ */
+export function buildLatestScreenshotsManifest(params: {
+  existing?: Partial<LatestScreenshotsManifestBlock> | null;
+  savedPaths: string[];
+  updatedAt?: string;
+}): LatestScreenshotsManifestBlock {
+  const ts = params.updatedAt || new Date().toISOString();
+  const prevFiles = Array.isArray(params.existing?.files) ? params.existing!.files : [];
+  const byPath = new Map<string, { name: string; angle: string; path: string; updatedAt: string }>();
+
+  for (const f of prevFiles) {
+    if (f && typeof f.path === 'string') {
+      byPath.set(f.path, f);
+    }
+  }
+
+  let primary: string | null = params.existing?.latestPrimary || null;
+  for (const repoPath of params.savedPaths) {
+    const name = repoPath.split('/').pop() || repoPath;
+    const angle = name
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/^latest[_-]/i, '') || 'viewport';
+    byPath.set(repoPath, { name, angle, path: repoPath, updatedAt: ts });
+    if (
+      !primary ||
+      name === 'latest_hero.png' ||
+      name === 'latest_camera.png' ||
+      name === 'latest_viewport.png'
+    ) {
+      primary = repoPath;
+    }
+  }
+
+  const files = Array.from(byPath.values()).sort((a, b) => {
+    const aLatest = isLatestScreenshotFilename(a.name) ? 0 : 1;
+    const bLatest = isLatestScreenshotFilename(b.name) ? 0 : 1;
+    if (aLatest !== bLatest) return aLatest - bLatest;
+    return a.name.localeCompare(b.name);
+  });
+
+  if (!primary && files.length > 0) {
+    primary = files[0].path;
+  }
+
+  return {
+    updatedAt: ts,
+    revision: (typeof params.existing?.revision === 'number' ? params.existing.revision : 0) + 1,
+    latestPrimary: primary,
+    files,
+  };
+}
+
+/**
  * Validates the configurable Local Blender Backup endpoint.
  * Restricts strictly to http://127.0.0.1:<port>/... or http://localhost:<port>/...
  * on non-privileged user ports (1024-65535) to prevent non-local or unsafe URLs.

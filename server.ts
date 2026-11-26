@@ -6,7 +6,10 @@ import { GoogleGenAI, Type } from '@google/genai';
 import {
   buildGitHubPagesUrl,
   buildGitHubReleaseUrl,
+  buildLatestScreenshotFilename,
+  buildLatestScreenshotsManifest,
   buildModelSubfolderPaths,
+  isLatestScreenshotFilename,
   normalizeWorkspacePath,
   sanitizeModelSlug,
   validateGithubSlug,
@@ -14,6 +17,7 @@ import {
   validateReleaseAsset,
   validateScreenshotFilename,
   validateTextureFilename,
+  type LatestScreenshotsManifestBlock,
 } from './src/utils/pathSafety.ts';
 import {
   MAX_MODEL_UPLOAD_BYTES,
@@ -187,6 +191,8 @@ app.get('/api/config', (_req: Request, res: Response) => {
 
 // 2. Starter repository files fallback (when GitHub secrets are not yet set)
 const STARTER_REPO_PATHS = [
+  'AGENTS.md',
+  'AGENT.md',
   'scripts/build.py',
   'scripts/export_and_render.py',
   '.github/workflows/build-blend.yml',
@@ -237,7 +243,13 @@ app.get('/api/github/tree', async (_req: Request, res: Response) => {
       tree?: Array<{ path?: string; type?: string; size?: number; sha?: string }>;
     };
 
-    const files = (treeJson.tree || [])
+    const files: Array<{
+      path: string;
+      name: string;
+      size: number;
+      sha: string;
+      source: 'github' | 'starter';
+    }> = (treeJson.tree || [])
       .filter((item) => item.type === 'blob' && typeof item.path === 'string')
       .filter((item) => !item.path!.startsWith('node_modules/') && !item.path!.startsWith('dist/'))
       .slice(0, 400)
@@ -248,6 +260,25 @@ app.get('/api/github/tree', async (_req: Request, res: Response) => {
         sha: item.sha || '',
         source: 'github' as const,
       }));
+
+    const existingPaths = new Set(files.map((f) => f.path));
+    for (const rel of STARTER_REPO_PATHS) {
+      if (existingPaths.has(rel)) continue;
+      const resolved = path.resolve(WORKSPACE_ROOT, rel);
+      if (!resolved.startsWith(WORKSPACE_ROOT + path.sep)) continue;
+      try {
+        const stat = await fs.stat(resolved);
+        files.unshift({
+          path: rel,
+          name: rel.split('/').pop() || rel,
+          size: stat.size,
+          sha: '',
+          source: 'starter',
+        });
+      } catch {
+        // Ignore if not present locally
+      }
+    }
 
     res.json({
       configured: true,
@@ -265,7 +296,7 @@ app.get('/api/github/tree', async (_req: Request, res: Response) => {
   }
 });
 
-// 3b. Read any text file from GitHub Workspace
+// 3b. Read any text file from GitHub Workspace (with starter fallback for newly added repo manuals)
 app.get('/api/github/file', async (req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
@@ -287,6 +318,25 @@ app.get('/api/github/file', async (req: Request, res: Response) => {
     const endpoint = `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodedPath}?ref=${encodeURIComponent(gh.branch)}`;
     const fileRes = await fetch(endpoint, { headers: githubHeaders(gh.token) });
     if (!fileRes.ok) {
+      if ((STARTER_REPO_PATHS as readonly string[]).includes(safePath)) {
+        const resolved = path.resolve(WORKSPACE_ROOT, safePath);
+        if (resolved.startsWith(WORKSPACE_ROOT + path.sep)) {
+          try {
+            const localContent = await fs.readFile(resolved, 'utf8');
+            res.json({
+              path: safePath,
+              sha: '',
+              size: Buffer.byteLength(localContent, 'utf8'),
+              htmlUrl: null,
+              content: localContent,
+              source: 'starter',
+            });
+            return;
+          } catch {
+            // Fall through to 404
+          }
+        }
+      }
       res.status(fileRes.status).json({ error: `File ${safePath} not found in GitHub.` });
       return;
     }
@@ -322,10 +372,11 @@ app.put('/api/github/file', async (req: Request, res: Response) => {
     return;
   }
 
-  const { path: rawPath, content, commitMessage } = req.body as {
+  const { path: rawPath, content, commitMessage, message } = req.body as {
     path?: unknown;
     content?: unknown;
     commitMessage?: unknown;
+    message?: unknown;
   };
   if (typeof rawPath !== 'string' || typeof content !== 'string' || content.length > 500_000) {
     res.status(400).json({ error: 'Valid path and UTF-8 content under 500KB are required.' });
@@ -341,15 +392,17 @@ app.put('/api/github/file', async (req: Request, res: Response) => {
   }
 
   try {
-    const note =
+    const rawNote =
       typeof commitMessage === 'string' && commitMessage.trim()
         ? commitMessage.trim()
-        : `Update ${safePath} from BlendFactory Studio`;
+        : typeof message === 'string' && message.trim()
+          ? message.trim()
+          : `Update ${safePath} from BlendFactory Studio`;
     const result = await commitGithubFile(
       gh,
       safePath,
       Buffer.from(content, 'utf8').toString('base64'),
-      note
+      rawNote
     );
     res.json({ committed: true, ...result });
   } catch (err) {
@@ -896,6 +949,7 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
     displayName,
     group,
     fileName,
+    modelFileName,
     modelBase64,
     buildPy,
     textures,
@@ -907,6 +961,7 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
     displayName?: unknown;
     group?: unknown;
     fileName?: unknown;
+    modelFileName?: unknown;
     modelBase64?: unknown;
     buildPy?: unknown;
     textures?: unknown;
@@ -915,7 +970,14 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
     commitMessage?: unknown;
   };
 
-  if (typeof fileName !== 'string' || typeof modelBase64 !== 'string') {
+  const resolvedFileName =
+    typeof fileName === 'string' && fileName.trim()
+      ? fileName.trim()
+      : typeof modelFileName === 'string' && modelFileName.trim()
+        ? modelFileName.trim()
+        : '';
+
+  if (!resolvedFileName || typeof modelBase64 !== 'string') {
     res.status(400).json({ error: 'fileName and modelBase64 are required.' });
     return;
   }
@@ -928,7 +990,7 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
     return;
   }
 
-  const check = validateModelUpload(fileName, decodedModel.length);
+  const check = validateModelUpload(resolvedFileName, decodedModel.length);
   if (!check.valid || !check.sanitizedName) {
     res.status(400).json({ error: check.reason || 'Invalid model filename.' });
     return;
@@ -942,6 +1004,7 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
       : `Save ${slug} asset bundle to ${paths.folder}/`;
 
   try {
+    const committedFiles: string[] = [];
     const modelRepoPath = `${paths.folder}/${check.sanitizedName}`;
     const mainCommit = await commitGithubFile(
       gh,
@@ -949,28 +1012,44 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
       decodedModel.toString('base64'),
       safeMsg
     );
+    committedFiles.push(modelRepoPath);
 
     const savedTextures: string[] = [];
     if (Array.isArray(textures)) {
       for (const tex of textures.slice(0, 12)) {
-        if (!tex || typeof tex.name !== 'string' || typeof tex.contentBase64 !== 'string') continue;
+        const rawB64 =
+          typeof tex?.contentBase64 === 'string'
+            ? tex.contentBase64
+            : typeof tex?.base64 === 'string'
+              ? tex.base64
+              : '';
+        if (!tex || typeof tex.name !== 'string' || !rawB64) continue;
         if (!validateTextureFilename(tex.name)) continue;
-        const buf = decodeStrictBase64(tex.contentBase64, MAX_SCREENSHOT_BYTES);
+        const buf = decodeStrictBase64(rawB64, MAX_SCREENSHOT_BYTES);
         const texPath = `${paths.texturesDir}/${tex.name}`;
         await commitGithubFile(gh, texPath, buf.toString('base64'), `Add texture ${tex.name} for ${slug}`);
         savedTextures.push(texPath);
+        committedFiles.push(texPath);
       }
     }
 
     const savedScreenshots: string[] = [];
     if (Array.isArray(screenshots)) {
       for (const shot of screenshots.slice(0, 8)) {
-        if (!shot || typeof shot.name !== 'string' || typeof shot.contentBase64 !== 'string') continue;
-        if (!validateScreenshotFilename(shot.name)) continue;
-        const buf = decodeStrictBase64(shot.contentBase64, MAX_SCREENSHOT_BYTES);
-        const shotPath = `${paths.screenshotsDir}/${shot.name}`;
-        await commitGithubFile(gh, shotPath, buf.toString('base64'), `Add screenshot ${shot.name} for ${slug}`);
+        const rawB64 =
+          typeof shot?.contentBase64 === 'string'
+            ? shot.contentBase64
+            : typeof shot?.base64 === 'string'
+              ? shot.base64
+              : '';
+        if (!shot || typeof shot.name !== 'string' || !rawB64) continue;
+        const latestName = buildLatestScreenshotFilename(shot.name);
+        if (!validateScreenshotFilename(latestName)) continue;
+        const buf = decodeStrictBase64(rawB64, MAX_SCREENSHOT_BYTES);
+        const shotPath = `${paths.screenshotsDir}/${latestName}`;
+        await commitGithubFile(gh, shotPath, buf.toString('base64'), `Save latest screenshot ${latestName} for ${slug}`);
         savedScreenshots.push(shotPath);
+        committedFiles.push(shotPath);
       }
     }
 
@@ -981,7 +1060,14 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
         Buffer.from(buildPy, 'utf8').toString('base64'),
         `Save Blender script for ${slug}`
       );
+      committedFiles.push(paths.buildPy);
     }
+
+    const nowIso = new Date().toISOString();
+    const latestScreenshots = buildLatestScreenshotsManifest({
+      savedPaths: savedScreenshots,
+      updatedAt: nowIso,
+    });
 
     const manifestObj = {
       slug,
@@ -992,7 +1078,8 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
       sizeBytes: decodedModel.length,
       textures: savedTextures,
       screenshots: savedScreenshots,
-      updatedAt: new Date().toISOString(),
+      latestScreenshots,
+      updatedAt: nowIso,
       ...(metadata && typeof metadata === 'object' ? { telemetry: metadata } : {}),
     };
 
@@ -1002,6 +1089,7 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
       Buffer.from(JSON.stringify(manifestObj, null, 2), 'utf8').toString('base64'),
       `Update manifest for ${slug}`
     );
+    committedFiles.push(paths.manifest);
 
     res.json({
       saved: true,
@@ -1011,8 +1099,10 @@ app.post('/api/github/save-model-bundle', async (req: Request, res: Response) =>
       commitSha: mainCommit.sha,
       htmlUrl: mainCommit.htmlUrl,
       proxyUrl: `/api/github/raw?path=${encodeURIComponent(modelRepoPath)}`,
+      committedFiles,
       texturesCount: savedTextures.length,
       screenshotsCount: savedScreenshots.length,
+      latestScreenshots,
     });
   } catch (err) {
     res.status(502).json({
@@ -1225,7 +1315,13 @@ app.get('/api/harness/models/:slug', async (req: Request, res: Response) => {
           `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encoded}?ref=${encodeURIComponent(gh.branch)}`,
           { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
         );
-        if (mRes.ok) manifest = (await mRes.json()) as Record<string, unknown>;
+        if (mRes.ok) {
+          try {
+            manifest = (await mRes.json()) as Record<string, unknown>;
+          } catch {
+            manifest = null;
+          }
+        }
       } else if (p === `${prefix}build.py`) {
         const encoded = p.split('/').map(encodeURIComponent).join('/');
         const bRes = await fetch(
@@ -1238,6 +1334,27 @@ app.get('/api/harness/models/:slug', async (req: Request, res: Response) => {
       }
     }
 
+    // Prioritize unambiguous `latest_*` screenshots first so AI models immediately read the newest views
+    screenshots.sort((a, b) => {
+      const aL = isLatestScreenshotFilename(a.name) ? 0 : 1;
+      const bL = isLatestScreenshotFilename(b.name) ? 0 : 1;
+      if (aL !== bL) return aL - bL;
+      return a.name.localeCompare(b.name);
+    });
+
+    const latestScreenshots =
+      (manifest?.latestScreenshots as LatestScreenshotsManifestBlock | undefined) || {
+        updatedAt: (manifest?.updatedAt as string | undefined) || new Date().toISOString(),
+        revision: 1,
+        latestPrimary: screenshots[0]?.path || null,
+        files: screenshots.map((s) => ({
+          name: s.name,
+          angle: s.name.replace(/\.[a-z0-9]+$/i, '').replace(/^latest[_-]/i, ''),
+          path: s.path,
+          updatedAt: (manifest?.updatedAt as string | undefined) || new Date().toISOString(),
+        })),
+      };
+
     res.json({
       slug,
       folder: `models/${slug}`,
@@ -1246,13 +1363,15 @@ app.get('/api/harness/models/:slug', async (req: Request, res: Response) => {
       buildPy,
       textures,
       screenshots,
+      latestScreenshots,
     });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : 'Failed to inspect harness model.' });
   }
 });
 
-// 10c. Store captured multi-angle screenshots directly inside `models/<slug>/screenshots/`
+// 10c. Store captured screenshots directly inside `models/<slug>/screenshots/latest_<angle>.png`
+//      and update `models/<slug>/manifest.json` so AI harnesses know unambiguously which views are latest.
 app.post('/api/harness/models/:slug/screenshots', async (req: Request, res: Response) => {
   const gh = getGitHubEnv();
   if (!gh.configured) {
@@ -1267,8 +1386,9 @@ app.post('/api/harness/models/:slug/screenshots', async (req: Request, res: Resp
     return;
   }
 
-  const { screenshots } = req.body as {
-    screenshots?: Array<{ name?: unknown; contentBase64?: unknown }>;
+  const { screenshots, commitMessage } = req.body as {
+    screenshots?: Array<{ name?: unknown; angle?: unknown; contentBase64?: unknown; base64?: unknown }>;
+    commitMessage?: unknown;
   };
   if (!Array.isArray(screenshots) || screenshots.length === 0) {
     res.status(400).json({ error: 'Provide at least one screenshot { name, contentBase64 }.' });
@@ -1276,28 +1396,97 @@ app.post('/api/harness/models/:slug/screenshots', async (req: Request, res: Resp
   }
 
   const paths = buildModelSubfolderPaths(slug);
-  const uploaded: Array<{ name: string; path: string; url: string }> = [];
+  const uploaded: Array<{ name: string; path: string; url: string; isLatest: boolean }> = [];
+  const nowIso = new Date().toISOString();
 
   try {
     for (const shot of screenshots.slice(0, 8)) {
-      if (typeof shot.name !== 'string' || typeof shot.contentBase64 !== 'string') continue;
-      if (!validateScreenshotFilename(shot.name)) continue;
-      const buf = decodeStrictBase64(shot.contentBase64, MAX_SCREENSHOT_BYTES);
-      const repoPath = `${paths.screenshotsDir}/${shot.name}`;
-      await commitGithubFile(
-        gh,
-        repoPath,
-        buf.toString('base64'),
-        `Store viewport screenshot ${shot.name} for ${slug}`
-      );
+      const rawB64 =
+        typeof shot.contentBase64 === 'string'
+          ? shot.contentBase64
+          : typeof shot.base64 === 'string'
+            ? shot.base64
+            : '';
+      const rawLabel =
+        typeof shot.name === 'string' && shot.name.trim()
+          ? shot.name.trim()
+          : typeof shot.angle === 'string' && shot.angle.trim()
+            ? shot.angle.trim()
+            : 'viewport';
+      if (!rawB64) continue;
+
+      const latestName = buildLatestScreenshotFilename(rawLabel);
+      if (!validateScreenshotFilename(latestName)) continue;
+
+      const buf = decodeStrictBase64(rawB64, MAX_SCREENSHOT_BYTES);
+      const repoPath = `${paths.screenshotsDir}/${latestName}`;
+      const note =
+        typeof commitMessage === 'string' && commitMessage.trim()
+          ? `${commitMessage.trim().slice(0, 95)} (${latestName})`
+          : `Save latest screenshot ${latestName} for ${slug}`;
+
+      await commitGithubFile(gh, repoPath, buf.toString('base64'), note);
       uploaded.push({
-        name: shot.name,
+        name: latestName,
         path: repoPath,
         url: `/api/github/raw?path=${encodeURIComponent(repoPath)}`,
+        isLatest: true,
       });
     }
 
-    res.json({ uploaded: true, slug, count: uploaded.length, screenshots: uploaded });
+    if (uploaded.length === 0) {
+      res.status(400).json({ error: 'No valid screenshot payloads were provided.' });
+      return;
+    }
+
+    // Read existing manifest.json if present and update latestScreenshots pointer + revision
+    let existingManifest: Record<string, unknown> = {};
+    try {
+      const encodedManifest = paths.manifest.split('/').map(encodeURIComponent).join('/');
+      const mRes = await fetch(
+        `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${encodedManifest}?ref=${encodeURIComponent(gh.branch)}`,
+        { headers: githubHeaders(gh.token, 'application/vnd.github.raw+json') }
+      );
+      if (mRes.ok) {
+        existingManifest = (await mRes.json()) as Record<string, unknown>;
+      }
+    } catch {
+      existingManifest = {};
+    }
+
+    const latestScreenshots = buildLatestScreenshotsManifest({
+      existing: existingManifest.latestScreenshots as Partial<LatestScreenshotsManifestBlock> | undefined,
+      savedPaths: uploaded.map((u) => u.path),
+      updatedAt: nowIso,
+    });
+
+    const mergedManifest = {
+      slug,
+      name: (existingManifest.name as string | undefined) || slug,
+      group: (existingManifest.group as string | undefined) || 'Props',
+      ...existingManifest,
+      screenshots: latestScreenshots.files.map((f) => f.path),
+      latestScreenshots,
+      updatedAt: nowIso,
+    };
+
+    await commitGithubFile(
+      gh,
+      paths.manifest,
+      Buffer.from(JSON.stringify(mergedManifest, null, 2), 'utf8').toString('base64'),
+      `Update latestScreenshots manifest for ${slug}`
+    );
+
+    res.json({
+      uploaded: true,
+      stored: true,
+      slug,
+      count: uploaded.length,
+      updatedAt: nowIso,
+      latestPrimary: latestScreenshots.latestPrimary,
+      latestScreenshots,
+      screenshots: uploaded,
+    });
   } catch (err) {
     res.status(502).json({
       error: err instanceof Error ? err.message : 'Failed to upload screenshots to GitHub.',
@@ -1318,7 +1507,7 @@ app.post('/api/vision/critique', async (req: Request, res: Response) => {
   const { imageBase64, mimeType, images, bpyScript, userGoal, passNumber, systemSkill } = req.body as {
     imageBase64?: unknown;
     mimeType?: unknown;
-    images?: Array<{ angle?: unknown; imageBase64?: unknown; mimeType?: unknown }>;
+    images?: Array<{ angle?: unknown; label?: unknown; imageBase64?: unknown; base64?: unknown; mimeType?: unknown }>;
     bpyScript?: unknown;
     userGoal?: unknown;
     passNumber?: unknown;
@@ -1328,20 +1517,32 @@ app.post('/api/vision/critique', async (req: Request, res: Response) => {
   const visualParts: Array<{ inlineData: { mimeType: string; data: string } }> = [];
   if (Array.isArray(images) && images.length > 0) {
     for (const img of images.slice(0, 4)) {
-      if (typeof img?.imageBase64 === 'string' && img.imageBase64.length > 100) {
-        const safeMime =
-          img.mimeType === 'image/jpeg' || img.mimeType === 'image/png' || img.mimeType === 'image/webp'
-            ? img.mimeType
-            : 'image/png';
-        visualParts.push({ inlineData: { mimeType: safeMime, data: img.imageBase64 } });
+      const raw =
+        typeof img?.imageBase64 === 'string'
+          ? img.imageBase64
+          : typeof img?.base64 === 'string'
+            ? img.base64
+            : '';
+      if (raw.length > 100 && raw.length < 8_500_000) {
+        const cleaned = raw.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+        if (/^[A-Za-z0-9+/=]+$/.test(cleaned)) {
+          const safeMime =
+            img.mimeType === 'image/jpeg' || img.mimeType === 'image/png' || img.mimeType === 'image/webp'
+              ? img.mimeType
+              : 'image/png';
+          visualParts.push({ inlineData: { mimeType: safeMime, data: cleaned } });
+        }
       }
     }
-  } else if (typeof imageBase64 === 'string' && imageBase64.length > 100) {
-    const safeMime =
-      mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp'
-        ? mimeType
-        : 'image/png';
-    visualParts.push({ inlineData: { mimeType: safeMime, data: imageBase64 } });
+  } else if (typeof imageBase64 === 'string' && imageBase64.length > 100 && imageBase64.length < 8_500_000) {
+    const cleaned = imageBase64.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+    if (/^[A-Za-z0-9+/=]+$/.test(cleaned)) {
+      const safeMime =
+        mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp'
+          ? mimeType
+          : 'image/png';
+      visualParts.push({ inlineData: { mimeType: safeMime, data: cleaned } });
+    }
   }
 
   if (visualParts.length === 0) {

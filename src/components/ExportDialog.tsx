@@ -34,6 +34,7 @@ interface ExportDialogProps {
   onClose: () => void;
   onOpenConverter: () => void;
   onDownloadFormat: (format: ExportFormatId) => Promise<void>;
+  onSaveViewportToRepo: () => Promise<void>;
   onBuildBlendViaCloudCi: () => Promise<void>;
   onPushBundleToGithub: (group: ModelGroupName) => Promise<void>;
   onBackupBundleToDrive: (group: ModelGroupName) => Promise<void>;
@@ -63,6 +64,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
   onClose,
   onOpenConverter,
   onDownloadFormat,
+  onSaveViewportToRepo,
   onBuildBlendViaCloudCi,
   onPushBundleToGithub,
   onBackupBundleToDrive,
@@ -207,26 +209,51 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           <div className="mt-5 rounded-xl border border-[#EBE6DD] bg-[#FAF9F6] p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-[11px] font-medium text-[#847E75]">Output File</div>
+                <div className="text-[11px] font-medium text-[#847E75]">
+                  {selectedFormat === 'png' ? 'Repo Asset Target (No Auto-Download)' : 'Output File'}
+                </div>
                 <div className="mt-0.5 font-mono text-[13px] font-medium text-[#1C1B19]">
-                  {previewFilename}
+                  {selectedFormat === 'png' ? 'screenshots/latest_viewport.png' : previewFilename}
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={busy || (needsModel && !hasActiveModel)}
-                onClick={() =>
-                  runAction(`Exported ${previewFilename}`, () => onDownloadFormat(selectedFormat))
-                }
-                className="inline-flex items-center gap-2 rounded-lg bg-[#2D5A4C] px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[#22453A] disabled:opacity-45"
-              >
-                {workingAction ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="h-3.5 w-3.5" />
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedFormat === 'png' && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      runAction('Saved latest_viewport.png to model repo assets.', onSaveViewportToRepo)
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#2D5A4C] px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[#22453A] disabled:opacity-45"
+                  >
+                    {workingAction ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CloudUpload className="h-3.5 w-3.5" />
+                    )}
+                    Save Latest to Repo
+                  </button>
                 )}
-                Download {activeSpec.ext}
-              </button>
+                <button
+                  type="button"
+                  disabled={busy || (needsModel && !hasActiveModel)}
+                  onClick={() =>
+                    runAction(`Exported ${previewFilename}`, () => onDownloadFormat(selectedFormat))
+                  }
+                  className={
+                    selectedFormat === 'png'
+                      ? 'inline-flex items-center gap-1.5 rounded-lg border border-[#D3CEC4] bg-white px-3 py-2 text-[12px] font-medium text-[#1C1B19] transition-colors hover:bg-[#F5F3EF] disabled:opacity-45'
+                      : 'inline-flex items-center gap-2 rounded-lg bg-[#2D5A4C] px-4 py-2 text-[12px] font-medium text-white transition-colors hover:bg-[#22453A] disabled:opacity-45'
+                  }
+                >
+                  {workingAction && selectedFormat !== 'png' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                  Download {activeSpec.ext}
+                </button>
+              </div>
             </div>
 
             {selectedFormat === 'blend' && (

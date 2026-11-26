@@ -184,8 +184,18 @@ export interface FlattenedMeshData {
   colorRgb: [number, number, number];
 }
 
+function isEditorHelperNode(obj: THREE.Object3D): boolean {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (cur.userData?.isEditorHelper) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
 /**
- * Extracts all visible mesh geometry in world space from any Three.js Object3D hierarchy.
+ * Extracts all visible mesh geometry in world space from any Three.js Object3D hierarchy,
+ * cleanly excluding editor-only Light/Camera wireframe gizmo helpers.
  */
 export function extractFlattenedMeshes(root: THREE.Object3D): FlattenedMeshData[] {
   root.updateMatrixWorld(true);
@@ -195,7 +205,7 @@ export function extractFlattenedMeshes(root: THREE.Object3D): FlattenedMeshData[
   const normalMat = new THREE.Matrix3();
 
   root.traverse((obj) => {
-    if (!(obj as THREE.Mesh).isMesh || !obj.visible) return;
+    if (!(obj as THREE.Mesh).isMesh || !obj.visible || isEditorHelperNode(obj)) return;
     const mesh = obj as THREE.Mesh;
     const geom = mesh.geometry;
     const pos = geom.getAttribute('position');
@@ -715,89 +725,108 @@ export async function exportObject3DToBlob(
   const spec = EXPORT_FORMATS.find((f) => f.id === format)!;
   const filename = formatExportFilename(modelName, spec.ext);
 
-  root.updateMatrixWorld(true);
-
-  if (format === 'glb' || format === 'gltf') {
-    const exporter = new GLTFExporter();
-    const binary = format === 'glb';
-    const result = await new Promise<ArrayBuffer | Record<string, unknown>>((resolve, reject) => {
-      exporter.parse(
-        root,
-        (res) => resolve(res),
-        (err) => reject(err instanceof Error ? err : new Error('glTF export failed.')),
-        { binary, onlyVisible: true }
-      );
-    });
-    const blob = binary
-      ? new Blob([result as ArrayBuffer], { type: spec.mimeType })
-      : new Blob([JSON.stringify(result, null, 2)], { type: spec.mimeType });
-    return { blob, filename };
+  // Temporarily detach editor-only Light/Camera wireframe gizmo helpers so ALL exporters
+  // (including OBJExporter/STLExporter which ignore .visible=false) stay 100% mesh-clean
+  const detachedHelpers: Array<{ parent: THREE.Object3D; child: THREE.Object3D }> = [];
+  root.traverse((obj) => {
+    if (obj !== root && obj.userData?.isEditorHelper && obj.parent) {
+      detachedHelpers.push({ parent: obj.parent, child: obj });
+    }
+  });
+  for (const h of detachedHelpers) {
+    h.parent.remove(h.child);
   }
 
-  if (format === 'obj') {
-    const exporter = new OBJExporter();
-    const text = exporter.parse(root);
-    return { blob: new Blob([text], { type: spec.mimeType }), filename };
-  }
+  try {
+    root.updateMatrixWorld(true);
 
-  if (format === 'stl') {
-    const exporter = new STLExporter();
-    const dataView = exporter.parse(root, { binary: true });
-    const copy = new Uint8Array(dataView.byteLength);
-    copy.set(new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength));
-    return { blob: new Blob([copy.buffer], { type: spec.mimeType }), filename };
-  }
+    if (format === 'glb' || format === 'gltf') {
+      const exporter = new GLTFExporter();
+      const binary = format === 'glb';
+      const result = await new Promise<ArrayBuffer | Record<string, unknown>>((resolve, reject) => {
+        exporter.parse(
+          root,
+          (res) => resolve(res),
+          (err) => reject(err instanceof Error ? err : new Error('glTF export failed.')),
+          { binary, onlyVisible: true }
+        );
+      });
+      const blob = binary
+        ? new Blob([result as ArrayBuffer], { type: spec.mimeType })
+        : new Blob([JSON.stringify(result, null, 2)], { type: spec.mimeType });
+      return { blob, filename };
+    }
 
-  if (format === 'ply') {
-    const exporter = new PLYExporter();
-    const result = await new Promise<string | ArrayBuffer>((resolve, reject) => {
-      exporter.parse(root, (res) => resolve(res), { binary: false });
-      setTimeout(() => reject(new Error('PLY export timed out.')), 10_000);
-    });
-    return { blob: new Blob([result], { type: spec.mimeType }), filename };
-  }
+    if (format === 'obj') {
+      const exporter = new OBJExporter();
+      const text = exporter.parse(root);
+      return { blob: new Blob([text], { type: spec.mimeType }), filename };
+    }
 
-  if (format === 'usdz') {
-    const exporter = new USDZExporter();
-    const raw = await exporter.parseAsync(root);
-    const copy = new Uint8Array(raw.byteLength);
-    copy.set(raw);
-    return { blob: new Blob([copy.buffer], { type: spec.mimeType }), filename };
-  }
+    if (format === 'stl') {
+      const exporter = new STLExporter();
+      const dataView = exporter.parse(root, { binary: true });
+      const copy = new Uint8Array(dataView.byteLength);
+      copy.set(new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength));
+      return { blob: new Blob([copy.buffer], { type: spec.mimeType }), filename };
+    }
 
-  if (format === 'py') {
-    const objExporter = new OBJExporter();
-    const objText = objExporter.parse(root);
-    const pySource = buildBlenderReconstructionScript(modelName, objText);
-    return { blob: new Blob([pySource], { type: spec.mimeType }), filename };
-  }
+    if (format === 'ply') {
+      const exporter = new PLYExporter();
+      const result = await new Promise<string | ArrayBuffer>((resolve, reject) => {
+        exporter.parse(root, (res) => resolve(res), { binary: false });
+        setTimeout(() => reject(new Error('PLY export timed out.')), 10_000);
+      });
+      return { blob: new Blob([result], { type: spec.mimeType }), filename };
+    }
 
-  const meshes = extractFlattenedMeshes(root);
-  if (meshes.length === 0) {
-    throw new Error('No visible mesh geometry found to export.');
-  }
+    if (format === 'usdz') {
+      const exporter = new USDZExporter();
+      const raw = await exporter.parseAsync(root);
+      const copy = new Uint8Array(raw.byteLength);
+      copy.set(raw);
+      return { blob: new Blob([copy.buffer], { type: spec.mimeType }), filename };
+    }
 
-  if (format === 'fbx') {
-    return { blob: new Blob([serializeMeshesToFbxAscii(modelName, meshes)], { type: spec.mimeType }), filename };
-  }
-  if (format === 'dae') {
-    return { blob: new Blob([serializeMeshesToColladaDae(modelName, meshes)], { type: spec.mimeType }), filename };
-  }
-  if (format === 'usda') {
-    return { blob: new Blob([serializeMeshesToUsda(modelName, meshes)], { type: spec.mimeType }), filename };
-  }
-  if (format === 'step') {
-    return { blob: new Blob([serializeMeshesToStepCad(modelName, meshes)], { type: spec.mimeType }), filename };
-  }
-  if (format === 'dxf') {
-    return { blob: new Blob([serializeMeshesToDxf(meshes)], { type: spec.mimeType }), filename };
-  }
-  if (format === '3mf') {
-    return { blob: new Blob([serializeMeshesTo3mfXml(meshes)], { type: spec.mimeType }), filename };
-  }
+    if (format === 'py') {
+      const objExporter = new OBJExporter();
+      const objText = objExporter.parse(root);
+      const pySource = buildBlenderReconstructionScript(modelName, objText);
+      return { blob: new Blob([pySource], { type: spec.mimeType }), filename };
+    }
 
-  // format === 'off'
-  return { blob: new Blob([serializeMeshesToOff(meshes)], { type: spec.mimeType }), filename };
+    const meshes = extractFlattenedMeshes(root);
+    if (meshes.length === 0) {
+      throw new Error('No visible mesh geometry found to export.');
+    }
+
+    if (format === 'fbx') {
+      return { blob: new Blob([serializeMeshesToFbxAscii(modelName, meshes)], { type: spec.mimeType }), filename };
+    }
+    if (format === 'dae') {
+      return { blob: new Blob([serializeMeshesToColladaDae(modelName, meshes)], { type: spec.mimeType }), filename };
+    }
+    if (format === 'usda') {
+      return { blob: new Blob([serializeMeshesToUsda(modelName, meshes)], { type: spec.mimeType }), filename };
+    }
+    if (format === 'step') {
+      return { blob: new Blob([serializeMeshesToStepCad(modelName, meshes)], { type: spec.mimeType }), filename };
+    }
+    if (format === 'dxf') {
+      return { blob: new Blob([serializeMeshesToDxf(meshes)], { type: spec.mimeType }), filename };
+    }
+    if (format === '3mf') {
+      return { blob: new Blob([serializeMeshesTo3mfXml(meshes)], { type: spec.mimeType }), filename };
+    }
+
+    // format === 'off'
+    return { blob: new Blob([serializeMeshesToOff(meshes)], { type: spec.mimeType }), filename };
+  } finally {
+    for (const h of detachedHelpers) {
+      h.parent.add(h.child);
+    }
+    root.updateMatrixWorld(true);
+  }
 }
 
 export function triggerBlobDownload(blob: Blob, filename: string): void {

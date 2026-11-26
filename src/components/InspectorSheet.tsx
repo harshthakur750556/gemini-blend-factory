@@ -4,13 +4,16 @@ import {
   ArrowDownToLine,
   Bone,
   Box,
+  Camera,
   Circle,
+  CloudUpload,
   Columns3,
   Copy,
   Crosshair,
   Cylinder,
   Eye,
   EyeOff,
+  Flashlight,
   FlipHorizontal2,
   Globe,
   Grid2X2,
@@ -32,9 +35,11 @@ import {
   Sliders,
   Sparkles,
   Square,
+  Sun,
   Trash2,
   Triangle,
   Unlock,
+  Video,
   Waves,
   Wrench,
   X,
@@ -50,6 +55,8 @@ import type {
   OutlinerNode,
   SceneTelemetry,
   SectionCutConfig,
+  SelectedCameraInfo,
+  SelectedLightInfo,
   StudioLightingPreset,
   SurfaceParams,
   TopologyDiagnostics,
@@ -124,6 +131,21 @@ interface InspectorSheetProps {
   onScrubAnimation: (timeSec: number) => void;
   onBoneRotationChange: (uuid: string, axis: 'x' | 'y' | 'z', deg: number) => void;
   onResetPose: () => void;
+  // Blender Light & Scene Camera Properties
+  selectedLightInfo: SelectedLightInfo | null;
+  selectedCameraInfo: SelectedCameraInfo | null;
+  onUpdateLightProperties: (
+    uuid: string,
+    patch: Partial<Omit<SelectedLightInfo, 'uuid' | 'name' | 'lightKind'>>
+  ) => void;
+  onUpdateCameraProperties: (
+    uuid: string,
+    patch: Partial<Pick<SelectedCameraInfo, 'focalLengthMm' | 'near' | 'far'>>
+  ) => void;
+  onSetActiveSceneCamera: (uuid: string | null) => void;
+  onToggleLookThroughCamera: (uuid?: string) => void;
+  onAlignCameraToView: (uuid?: string) => void;
+  onCaptureCameraToRepo: () => void;
 }
 
 const SWATCHES = [
@@ -135,12 +157,33 @@ const SWATCHES = [
   { name: 'Botanical Sage', hex: '#2D5A4C' },
 ];
 
+const LIGHT_COLOR_PRESETS = [
+  { name: 'Warm Tungsten', hex: '#FFE4B8' },
+  { name: 'Daylight', hex: '#FFF7EA' },
+  { name: 'Pure White', hex: '#FFFFFF' },
+  { name: 'Cool Sky', hex: '#DCEBFF' },
+  { name: 'Amber Rim', hex: '#FFB76B' },
+];
+
 const LIGHTING_LABELS: Record<StudioLightingPreset, string> = {
   'studio-4k': 'Studio Gallery 4K',
   architectural: 'Daylight Architectural',
   'high-contrast': 'Sculptural Rim',
   'soft-clay': 'Warm Soft Clay',
 };
+
+const LIGHT_CAMERA_BUTTONS: Array<{
+  kind: WorldPrimitiveKind;
+  label: string;
+  accent: 'light' | 'camera';
+  icon: React.ReactNode;
+}> = [
+  { kind: 'point-light', label: 'Point', accent: 'light', icon: <Lightbulb className="h-3.5 w-3.5" /> },
+  { kind: 'sun-light', label: 'Sun', accent: 'light', icon: <Sun className="h-3.5 w-3.5" /> },
+  { kind: 'spot-light', label: 'Spot', accent: 'light', icon: <Flashlight className="h-3.5 w-3.5" /> },
+  { kind: 'area-light', label: 'Area', accent: 'light', icon: <Square className="h-3.5 w-3.5" /> },
+  { kind: 'scene-camera', label: 'Camera', accent: 'camera', icon: <Video className="h-3.5 w-3.5" /> },
+];
 
 const PRIMITIVE_BUTTONS: Array<{
   kind: WorldPrimitiveKind;
@@ -157,7 +200,6 @@ const PRIMITIVE_BUTTONS: Array<{
   { kind: 'stairs', label: 'Stairs', icon: <Columns3 className="h-3.5 w-3.5" /> },
   { kind: 'terrain', label: 'Terrain', icon: <Mountain className="h-3.5 w-3.5" /> },
   { kind: 'water', label: 'Water', icon: <Waves className="h-3.5 w-3.5" /> },
-  { kind: 'point-light', label: 'Light', icon: <Lightbulb className="h-3.5 w-3.5" /> },
   { kind: 'collider', label: 'UCX Box', icon: <ShieldCheck className="h-3.5 w-3.5" /> },
 ];
 
@@ -315,9 +357,17 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   onScrubAnimation,
   onBoneRotationChange,
   onResetPose,
+  selectedLightInfo,
+  selectedCameraInfo,
+  onUpdateLightProperties,
+  onUpdateCameraProperties,
+  onSetActiveSceneCamera,
+  onToggleLookThroughCamera,
+  onAlignCameraToView,
+  onCaptureCameraToRepo,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [nodeFilter, setNodeFilter] = useState<'all' | 'mesh' | 'bone'>('all');
+  const [nodeFilter, setNodeFilter] = useState<'all' | 'mesh' | 'studio' | 'bone'>('all');
   const [arrayCount, setArrayCount] = useState(4);
   const [arrayOffsetX, setArrayOffsetX] = useState(1.25);
   const [arrayOffsetY, setArrayOffsetY] = useState(0);
@@ -329,6 +379,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
     const q = searchQuery.trim().toLowerCase();
     return outlinerNodes.filter((n) => {
       if (nodeFilter === 'mesh' && n.type !== 'Mesh' && n.type !== 'SkinnedMesh') return false;
+      if (nodeFilter === 'studio' && n.type !== 'Light' && n.type !== 'Camera') return false;
       if (nodeFilter === 'bone' && n.type !== 'Bone') return false;
       if (q && !n.name.toLowerCase().includes(q)) return false;
       return true;
@@ -336,6 +387,358 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   }, [outlinerNodes, searchQuery, nodeFilter]);
 
   if (!open) return null;
+
+  const renderLightPropertiesCard = () => {
+    if (!selectedLightInfo) return null;
+    const isSpot = selectedLightInfo.lightKind === 'spot';
+    const isPoint = selectedLightInfo.lightKind === 'point';
+    const isArea = selectedLightInfo.lightKind === 'area';
+    return (
+      <div className="rounded-xl border border-[#E7D8BE] bg-[#FBF8F1] p-3.5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[#7D5516] uppercase">
+            {selectedLightInfo.lightKind === 'sun' ? (
+              <Sun className="h-3.5 w-3.5" />
+            ) : selectedLightInfo.lightKind === 'spot' ? (
+              <Flashlight className="h-3.5 w-3.5" />
+            ) : (
+              <Lightbulb className="h-3.5 w-3.5" />
+            )}
+            {selectedLightInfo.lightKind} Light Properties
+          </div>
+          <span className="truncate font-mono text-[10.5px] text-[#6E6960]">
+            {selectedLightInfo.name}
+          </span>
+        </div>
+
+        {/* Color & Presets */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-[#5A564F]">Light Color</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-[10.5px] text-[#6E6960]">
+                {selectedLightInfo.color.toUpperCase()}
+              </span>
+              <input
+                type="color"
+                aria-label="Light color"
+                value={selectedLightInfo.color}
+                onChange={(e) =>
+                  onUpdateLightProperties(selectedLightInfo.uuid, { color: e.target.value })
+                }
+                className="h-6 w-7 cursor-pointer rounded border border-[#D8D3CA] bg-white p-0.5"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-5 gap-1">
+            {LIGHT_COLOR_PRESETS.map((p) => (
+              <button
+                key={p.hex}
+                type="button"
+                title={p.name}
+                aria-label={`Apply ${p.name} light color`}
+                onClick={() =>
+                  onUpdateLightProperties(selectedLightInfo.uuid, { color: p.hex })
+                }
+                className="h-5 rounded border border-[#DCD4C6] transition-transform hover:scale-105"
+                style={{ backgroundColor: p.hex }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Power / Intensity */}
+        <div>
+          <div className="mb-1 flex justify-between text-[11px]">
+            <span className="text-[#5A564F]">Power / Intensity</span>
+            <span className="font-mono text-[#1C1B19] tabular-nums">
+              {selectedLightInfo.intensity.toFixed(1)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={25}
+            step={0.2}
+            aria-label="Light intensity"
+            value={selectedLightInfo.intensity}
+            onChange={(e) =>
+              onUpdateLightProperties(selectedLightInfo.uuid, {
+                intensity: parseFloat(e.target.value),
+              })
+            }
+            className="atelier-range w-full"
+          />
+        </div>
+
+        {/* Distance (Point & Spot) */}
+        {(isPoint || isSpot) && typeof selectedLightInfo.distance === 'number' && (
+          <div>
+            <div className="mb-1 flex justify-between text-[11px]">
+              <span className="text-[#5A564F]">Range / Distance</span>
+              <span className="font-mono text-[#1C1B19] tabular-nums">
+                {selectedLightInfo.distance.toFixed(1)} m
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={30}
+              step={0.5}
+              aria-label="Light distance"
+              value={selectedLightInfo.distance}
+              onChange={(e) =>
+                onUpdateLightProperties(selectedLightInfo.uuid, {
+                  distance: parseFloat(e.target.value),
+                })
+              }
+              className="atelier-range w-full"
+            />
+          </div>
+        )}
+
+        {/* Spot Cone Angle & Penumbra */}
+        {isSpot && (
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="mb-1 flex justify-between text-[10.5px]">
+                <span className="text-[#5A564F]">Cone</span>
+                <span className="font-mono text-[#1C1B19]">{selectedLightInfo.angleDeg ?? 32}°</span>
+              </div>
+              <input
+                type="range"
+                min={10}
+                max={80}
+                step={1}
+                aria-label="Spot cone angle"
+                value={selectedLightInfo.angleDeg ?? 32}
+                onChange={(e) =>
+                  onUpdateLightProperties(selectedLightInfo.uuid, {
+                    angleDeg: parseInt(e.target.value, 10),
+                  })
+                }
+                className="atelier-range w-full"
+              />
+            </div>
+            <div>
+              <div className="mb-1 flex justify-between text-[10.5px]">
+                <span className="text-[#5A564F]">Blend</span>
+                <span className="font-mono text-[#1C1B19]">
+                  {Math.round((selectedLightInfo.penumbra ?? 0.35) * 100)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                aria-label="Spot penumbra blend"
+                value={selectedLightInfo.penumbra ?? 0.35}
+                onChange={(e) =>
+                  onUpdateLightProperties(selectedLightInfo.uuid, {
+                    penumbra: parseFloat(e.target.value),
+                  })
+                }
+                className="atelier-range w-full"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Area Width & Height */}
+        {isArea && (
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="text-[10.5px] text-[#5A564F]">Width (m)</span>
+              <input
+                type="number"
+                min={0.2}
+                max={10}
+                step={0.2}
+                value={Number((selectedLightInfo.width ?? 2.0).toFixed(1))}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isFinite(v) && v >= 0.2) {
+                    onUpdateLightProperties(selectedLightInfo.uuid, { width: v });
+                  }
+                }}
+                className="mt-1 w-full rounded-lg border border-[#E2DDD4] bg-white px-2 py-1 font-mono text-[11px]"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10.5px] text-[#5A564F]">Height (m)</span>
+              <input
+                type="number"
+                min={0.2}
+                max={10}
+                step={0.2}
+                value={Number((selectedLightInfo.height ?? 1.2).toFixed(1))}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isFinite(v) && v >= 0.2) {
+                    onUpdateLightProperties(selectedLightInfo.uuid, { height: v });
+                  }
+                }}
+                className="mt-1 w-full rounded-lg border border-[#E2DDD4] bg-white px-2 py-1 font-mono text-[11px]"
+              />
+            </label>
+          </div>
+        )}
+
+        {/* Cast Shadow Toggle */}
+        {!isArea && (
+          <label className="flex cursor-pointer items-center justify-between pt-0.5 text-[11.5px] text-[#1C1B19]">
+            <span>Cast Shadows</span>
+            <input
+              type="checkbox"
+              checked={selectedLightInfo.castShadow}
+              onChange={(e) =>
+                onUpdateLightProperties(selectedLightInfo.uuid, { castShadow: e.target.checked })
+              }
+              className="h-4 w-4 accent-[#2D5A4C]"
+            />
+          </label>
+        )}
+      </div>
+    );
+  };
+
+  const renderCameraPropertiesCard = () => {
+    if (!selectedCameraInfo) return null;
+    return (
+      <div className="rounded-xl border border-[#CFE2DA] bg-[#F3F8F6] p-3.5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[#1D4438] uppercase">
+            <Video className="h-3.5 w-3.5" />
+            Scene Camera
+          </div>
+          <span className="truncate font-mono text-[10.5px] text-[#4C5C56]">
+            {selectedCameraInfo.name}
+          </span>
+        </div>
+
+        {/* Focal Length & Live FOV */}
+        <div>
+          <div className="mb-1 flex items-center justify-between text-[11px]">
+            <span className="text-[#4C5C56]">Focal Length</span>
+            <span className="font-mono text-[#1C1B19] tabular-nums">
+              {Math.round(selectedCameraInfo.focalLengthMm)} mm · {selectedCameraInfo.fov}° FOV
+            </span>
+          </div>
+          <input
+            type="range"
+            min={18}
+            max={200}
+            step={1}
+            aria-label="Camera focal length mm"
+            value={Math.round(selectedCameraInfo.focalLengthMm)}
+            onChange={(e) =>
+              onUpdateCameraProperties(selectedCameraInfo.uuid, {
+                focalLengthMm: parseInt(e.target.value, 10),
+              })
+            }
+            className="atelier-range w-full"
+          />
+          <div className="mt-1.5 grid grid-cols-4 gap-1">
+            {[24, 35, 50, 85].map((mm) => (
+              <button
+                key={mm}
+                type="button"
+                onClick={() =>
+                  onUpdateCameraProperties(selectedCameraInfo.uuid, { focalLengthMm: mm })
+                }
+                className={`rounded-md border py-0.5 font-mono text-[10px] transition-colors ${
+                  Math.round(selectedCameraInfo.focalLengthMm) === mm
+                    ? 'border-[#2D5A4C] bg-[#2D5A4C] text-white'
+                    : 'border-[#D4E2DC] bg-white text-[#4C5C56] hover:text-[#1C1B19]'
+                }`}
+              >
+                {mm}mm
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Clip Start / End */}
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="text-[10.5px] text-[#4C5C56]">Clip Start (m)</span>
+            <input
+              type="number"
+              min={0.01}
+              max={10}
+              step={0.05}
+              value={Number(selectedCameraInfo.near.toFixed(2))}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v >= 0.01) {
+                  onUpdateCameraProperties(selectedCameraInfo.uuid, { near: v });
+                }
+              }}
+              className="mt-1 w-full rounded-lg border border-[#D4E2DC] bg-white px-2 py-1 font-mono text-[11px]"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10.5px] text-[#4C5C56]">Clip End (m)</span>
+            <input
+              type="number"
+              min={5}
+              max={1000}
+              step={10}
+              value={Math.round(selectedCameraInfo.far)}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v >= 5) {
+                  onUpdateCameraProperties(selectedCameraInfo.uuid, { far: v });
+                }
+              }}
+              className="mt-1 w-full rounded-lg border border-[#D4E2DC] bg-white px-2 py-1 font-mono text-[11px]"
+            />
+          </label>
+        </div>
+
+        {/* Blender Camera Actions */}
+        <div className="grid grid-cols-1 gap-1.5 pt-0.5">
+          <button
+            type="button"
+            onClick={() => onToggleLookThroughCamera(selectedCameraInfo.uuid)}
+            className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11.5px] font-medium transition-colors ${
+              selectedCameraInfo.lookingThrough
+                ? 'bg-[#1C1B19] text-white hover:bg-[#33312E]'
+                : 'bg-[#2D5A4C] text-white hover:bg-[#22453A]'
+            }`}
+          >
+            <Video className="h-3.5 w-3.5" />
+            {selectedCameraInfo.lookingThrough
+              ? 'Exit Camera View (Numpad 0)'
+              : 'Look Through Camera (Numpad 0)'}
+          </button>
+
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              onClick={() => onAlignCameraToView(selectedCameraInfo.uuid)}
+              className="flex items-center justify-center gap-1 rounded-lg border border-[#C9DBD3] bg-white py-1.5 text-[11px] font-medium text-[#1D4438] hover:bg-[#EBF2EF]"
+            >
+              <Crosshair className="h-3 w-3" />
+              Align to View
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onSetActiveSceneCamera(selectedCameraInfo.uuid);
+                onCaptureCameraToRepo();
+              }}
+              className="flex items-center justify-center gap-1 rounded-lg border border-[#C9DBD3] bg-white py-1.5 text-[11px] font-medium text-[#1D4438] hover:bg-[#EBF2EF]"
+            >
+              <CloudUpload className="h-3 w-3" />
+              Save to Repo
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const tabs: Array<{ id: InspectorTabId; label: string; icon: React.ReactNode }> = [
     { id: 'outliner', label: 'Scene', icon: <Box className="h-3.5 w-3.5" /> },
@@ -411,18 +814,25 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
 
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1">
-                  {(['all', 'mesh', 'bone'] as const).map((kind) => (
+                  {(
+                    [
+                      { id: 'all', label: 'All' },
+                      { id: 'mesh', label: 'Mesh' },
+                      { id: 'studio', label: 'Lights/Cam' },
+                      { id: 'bone', label: 'Bone' },
+                    ] as const
+                  ).map((kind) => (
                     <button
-                      key={kind}
+                      key={kind.id}
                       type="button"
-                      onClick={() => setNodeFilter(kind)}
-                      className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                        nodeFilter === kind
+                      onClick={() => setNodeFilter(kind.id)}
+                      className={`rounded-md px-2 py-1 text-[10.5px] font-medium transition-colors ${
+                        nodeFilter === kind.id
                           ? 'bg-[#EBF2EF] text-[#22453A]'
                           : 'text-[#6E6960] hover:bg-[#F5F3EF]'
                       }`}
                     >
-                      {kind}
+                      {kind.label}
                     </button>
                   ))}
                 </div>
@@ -461,8 +871,20 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                       >
                         {node.type === 'Bone' ? (
                           <Bone className="h-3 w-3 shrink-0 text-[#847E75]" />
+                        ) : node.type === 'Camera' ? (
+                          <Video
+                            className={`h-3 w-3 shrink-0 ${
+                              node.isActiveCamera ? 'text-[#2D5A4C]' : 'text-[#6E6960]'
+                            }`}
+                          />
                         ) : node.type === 'Light' ? (
-                          <Lightbulb className="h-3 w-3 shrink-0 text-[#9A6316]" />
+                          node.lightKind === 'sun' ? (
+                            <Sun className="h-3 w-3 shrink-0 text-[#9A6316]" />
+                          ) : node.lightKind === 'spot' ? (
+                            <Flashlight className="h-3 w-3 shrink-0 text-[#9A6316]" />
+                          ) : (
+                            <Lightbulb className="h-3 w-3 shrink-0 text-[#9A6316]" />
+                          )
                         ) : (
                           <Box className="h-3 w-3 shrink-0 text-[#847E75]" />
                         )}
@@ -471,6 +893,21 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                         </span>
                       </button>
                       <div className="flex shrink-0 items-center gap-0.5">
+                        {node.type === 'Camera' && (
+                          <button
+                            type="button"
+                            onClick={() => onToggleLookThroughCamera(node.uuid)}
+                            title="Look Through Camera (Numpad 0)"
+                            aria-label={`Look through ${node.name}`}
+                            className={`rounded p-1 transition-colors ${
+                              node.isActiveCamera
+                                ? 'bg-[#EBF2EF] text-[#2D5A4C]'
+                                : 'text-[#847E75] hover:bg-white hover:text-[#1C1B19]'
+                            }`}
+                          >
+                            <Camera className="h-3 w-3" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => onToggleSoloNode(node.uuid)}
@@ -516,6 +953,9 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                 })
               )}
             </div>
+
+            {renderLightPropertiesCard()}
+            {renderCameraPropertiesCard()}
 
             {/* Editable Transform (Position, Rotation, Scale) */}
             <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
@@ -718,6 +1158,38 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Blender Lights & Scene Cameras Creation Strip */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  Lights & Cameras
+                </span>
+                <span className="font-mono text-[10px] text-[#847E75]">Numpad 0 · View</span>
+              </div>
+              <div className="grid grid-cols-5 gap-1">
+                {LIGHT_CAMERA_BUTTONS.map((item) => (
+                  <button
+                    key={item.kind}
+                    type="button"
+                    onClick={() => onAddPrimitive(item.kind)}
+                    className={`flex flex-col items-center justify-center gap-1 rounded-lg border px-1 py-2 text-[10.5px] font-medium transition-colors ${
+                      item.accent === 'camera'
+                        ? 'border-[#CFE2DA] bg-[#F4F9F6] text-[#1D4438] hover:border-[#2D5A4C] hover:bg-[#E7F2ED]'
+                        : 'border-[#EAE0CE] bg-[#FCF9F2] text-[#5E4518] hover:border-[#B8863B] hover:bg-[#F7EFE0]'
+                    }`}
+                  >
+                    <span className={item.accent === 'camera' ? 'text-[#2D5A4C]' : 'text-[#9A6316]'}>
+                      {item.icon}
+                    </span>
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {renderLightPropertiesCard()}
+            {renderCameraPropertiesCard()}
 
             {/* Add Mesh / World Prefabs (Shift+A style) */}
             <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">

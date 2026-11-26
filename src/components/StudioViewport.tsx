@@ -19,10 +19,13 @@ import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 import { AMFLoader } from 'three/examples/jsm/loaders/AMFLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import {
   Camera,
   ChevronDown,
   ChevronUp,
+  CloudUpload,
+  Crosshair,
   Expand,
   Eye,
   EyeOff,
@@ -44,6 +47,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Video,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -58,6 +63,11 @@ import {
   buildArrayModifierClones,
   buildScatterInstances,
   createWorldPrimitive,
+  focalLengthMmToFovDeg,
+  fovDegToFocalLengthMm,
+  rebuildAreaLightFrameHelper,
+  rebuildCameraFrustumHelper,
+  rebuildSpotLightConeHelper,
 } from '../utils/worldPrimitives';
 import { parseDxf3dFacesToGeometry, parseOffToGeometry } from '../utils/modelConverter';
 import type {
@@ -72,8 +82,11 @@ import type {
   InsideOutSide,
   MaterialChannelInfo,
   OutlinerNode,
+  SceneLightKind,
   SceneTelemetry,
   SectionCutConfig,
+  SelectedCameraInfo,
+  SelectedLightInfo,
   ShadingPass,
   StudioLightingPreset,
   SurfaceParams,
@@ -95,6 +108,7 @@ export interface StudioViewportHandle {
   zoomBy: (factor: number) => void;
   resetView: () => void;
   captureSnapshot: (download?: boolean) => string | null;
+  captureActiveCameraSnapshot: () => string | null;
   captureMultiAngleScreenshots: () => CapturedScreenshot[];
   getActiveModelRoot: () => THREE.Object3D | null;
   selectNode: (uuid: string | null) => void;
@@ -106,6 +120,18 @@ export interface StudioViewportHandle {
     axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ' | 'scaleX' | 'scaleY' | 'scaleZ',
     value: number
   ) => void;
+  // Blender Light & Scene Camera Properties
+  updateLightProperties: (
+    uuid: string,
+    patch: Partial<Omit<SelectedLightInfo, 'uuid' | 'name' | 'lightKind'>>
+  ) => void;
+  updateCameraProperties: (
+    uuid: string,
+    patch: Partial<Pick<SelectedCameraInfo, 'focalLengthMm' | 'near' | 'far'>>
+  ) => void;
+  setActiveSceneCamera: (uuid: string | null) => void;
+  toggleLookThroughCamera: (uuid?: string) => void;
+  alignCameraToCurrentView: (uuid?: string) => void;
   // Blender World Assembly Suite
   addWorldPrimitive: (kind: WorldPrimitiveKind) => void;
   duplicateSelected: () => void;
@@ -174,6 +200,9 @@ interface StudioViewportProps {
   onBonesChange: (bones: BoneControlInfo[]) => void;
   onAnimationsChange: (clips: AnimationClipSummary[], activeIdx: number, duration: number) => void;
   onAnimationTimeChange: (timeSec: number, playing: boolean) => void;
+  onSelectedLightChange: (info: SelectedLightInfo | null) => void;
+  onSelectedCameraChange: (info: SelectedCameraInfo | null) => void;
+  onCaptureViewportToRepo: (dataUrl: string, angle: 'viewport' | 'camera') => void;
 }
 
 const SHADING_OPTIONS: Array<{ id: ShadingPass; label: string }> = [
@@ -201,6 +230,114 @@ const WORLD_ENV_BG: Record<WorldEnvironmentPreset, string> = {
   meadow: '#E3EBE5',
   desert: '#F1E6D6',
 };
+
+function isInsideEditorElement(obj: THREE.Object3D): boolean {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (cur.userData?.isEditorHelper) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+function findStudioElementOwner(obj: THREE.Object3D): THREE.Object3D | null {
+  let cur: THREE.Object3D | null = obj;
+  while (cur) {
+    if (cur.userData?.studioElementType === 'light' || cur.userData?.studioElementType === 'camera') {
+      return cur;
+    }
+    cur = cur.parent;
+  }
+  return null;
+}
+
+function findChildLight(group: THREE.Object3D): THREE.Light | null {
+  for (const child of group.children) {
+    if ((child as THREE.Light).isLight) return child as THREE.Light;
+  }
+  return null;
+}
+
+function findChildPerspectiveCamera(group: THREE.Object3D): THREE.PerspectiveCamera | null {
+  for (const child of group.children) {
+    if ((child as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      return child as THREE.PerspectiveCamera;
+    }
+  }
+  return null;
+}
+
+function extractSelectedLightInfo(obj: THREE.Object3D | null): SelectedLightInfo | null {
+  if (!obj || obj.userData?.studioElementType !== 'light') return null;
+  const light = findChildLight(obj);
+  if (!light) return null;
+  const lightKind = (obj.userData.lightKind as SceneLightKind) || 'point';
+  const color = `#${light.color.getHexString()}`;
+  const info: SelectedLightInfo = {
+    uuid: obj.uuid,
+    name: obj.name || 'Light',
+    lightKind,
+    color,
+    intensity: light.intensity,
+    distance: 0,
+    decay: 2,
+    angleDeg: 38,
+    penumbra: 0.35,
+    width: 2.0,
+    height: 1.2,
+    castShadow: Boolean(light.castShadow),
+  };
+  if (lightKind === 'point' && (light as THREE.PointLight).isPointLight) {
+    const pt = light as THREE.PointLight;
+    info.distance = pt.distance;
+    info.decay = pt.decay;
+  } else if (lightKind === 'spot' && (light as THREE.SpotLight).isSpotLight) {
+    const sp = light as THREE.SpotLight;
+    info.distance = sp.distance;
+    info.decay = sp.decay;
+    info.angleDeg = Math.round(THREE.MathUtils.radToDeg(sp.angle));
+    info.penumbra = sp.penumbra;
+  } else if (lightKind === 'area') {
+    const rect = light as THREE.RectAreaLight;
+    info.width =
+      typeof obj.userData.areaWidth === 'number'
+        ? obj.userData.areaWidth
+        : typeof rect.width === 'number'
+          ? rect.width
+          : 2.0;
+    info.height =
+      typeof obj.userData.areaHeight === 'number'
+        ? obj.userData.areaHeight
+        : typeof rect.height === 'number'
+          ? rect.height
+          : 1.2;
+  }
+  return info;
+}
+
+function extractSelectedCameraInfo(
+  obj: THREE.Object3D | null,
+  activeCameraUuid: string | null,
+  lookingThrough: boolean
+): SelectedCameraInfo | null {
+  if (!obj || obj.userData?.studioElementType !== 'camera') return null;
+  const cam = findChildPerspectiveCamera(obj);
+  if (!cam) return null;
+  const focalLengthMm =
+    typeof obj.userData.focalLengthMm === 'number'
+      ? obj.userData.focalLengthMm
+      : Math.round(fovDegToFocalLengthMm(cam.fov));
+  return {
+    uuid: obj.uuid,
+    name: obj.name || 'Scene_Camera',
+    focalLengthMm,
+    fov: Number(cam.fov.toFixed(1)),
+    near: cam.near,
+    far: cam.far,
+    isActiveCamera: obj.uuid === activeCameraUuid,
+    lookingThrough: lookingThrough && obj.uuid === activeCameraUuid,
+  };
+}
 
 function createUvCheckerTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -495,6 +632,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       onBonesChange,
       onAnimationsChange,
       onAnimationTimeChange,
+      onSelectedLightChange,
+      onSelectedCameraChange,
+      onCaptureViewportToRepo,
     },
     ref
   ) => {
@@ -510,6 +650,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
     const [captionModelName, setCaptionModelName] = useState<string>('Stone & Cedar Lantern');
     const [captionSummary, setCaptionSummary] = useState<string>('Architectural Sample');
+    const [lookingThroughCam, setLookingThroughCam] = useState(false);
+    const [activeSceneCamLabel, setActiveSceneCamLabel] = useState<string>('Scene_Camera');
+    const [activeSceneCamFocalMm, setActiveSceneCamFocalMm] = useState<number>(50);
 
     // Mutable 3D engine state refs
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -517,6 +660,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const perspCamRef = useRef<THREE.PerspectiveCamera | null>(null);
     const orthoCamRef = useRef<THREE.OrthographicCamera | null>(null);
     const activeCamRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
+    const activeSceneCamUuidRef = useRef<string | null>(null);
+    const lookingThroughCamRef = useRef<boolean>(false);
     const orbitRef = useRef<OrbitControls | null>(null);
     const transformCtrlRef = useRef<TransformControls | null>(null);
     const transformHelperRef = useRef<THREE.Object3D | null>(null);
@@ -646,6 +791,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           onOutlinerChange([]);
           onMaterialsChange([]);
           onBonesChange([]);
+          onSelectedLightChange(null);
+          onSelectedCameraChange(null);
           onTransformInfoChange({
             uuid: null,
             name: 'Stage',
@@ -671,6 +818,40 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const bones: BoneControlInfo[] = [];
 
         const walk = (obj: THREE.Object3D, depth: number) => {
+          if (obj.userData?.isEditorHelper) return;
+
+          // Blender-style Studio Light container
+          if (obj.userData?.studioElementType === 'light') {
+            nodes.push({
+              uuid: obj.uuid,
+              name: obj.name || 'Light',
+              type: 'Light',
+              lightKind: (obj.userData.lightKind as SceneLightKind) || 'point',
+              depth,
+              visible: obj.visible,
+              locked: lockedNodesRef.current.has(obj.uuid),
+              vertices: 0,
+              triangles: 0,
+            });
+            return;
+          }
+
+          // Blender-style Scene Camera container
+          if (obj.userData?.studioElementType === 'camera') {
+            nodes.push({
+              uuid: obj.uuid,
+              name: obj.name || 'Scene_Camera',
+              type: 'Camera',
+              isActiveCamera: obj.uuid === activeSceneCamUuidRef.current,
+              depth,
+              visible: obj.visible,
+              locked: lockedNodesRef.current.has(obj.uuid),
+              vertices: 0,
+              triangles: 0,
+            });
+            return;
+          }
+
           const isMesh = (obj as THREE.Mesh).isMesh;
           const isSkinned = (obj as THREE.SkinnedMesh).isSkinnedMesh;
           const isBone = (obj as THREE.Bone).isBone;
@@ -800,6 +981,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const targetObj = selectedNodeUuidRef.current
           ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
           : root;
+        onSelectedLightChange(extractSelectedLightInfo(targetObj));
+        onSelectedCameraChange(
+          extractSelectedCameraInfo(targetObj, activeSceneCamUuidRef.current, lookingThroughCamRef.current)
+        );
         onTransformInfoChange({
           uuid: targetObj === root ? null : targetObj.uuid,
           name: targetObj.name || cleanName,
@@ -819,6 +1004,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         onDiagnosticsChange,
         onMaterialsChange,
         onOutlinerChange,
+        onSelectedCameraChange,
+        onSelectedLightChange,
         onTelemetryChange,
         onTransformInfoChange,
       ]
@@ -826,6 +1013,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
     const registerMeshesInSubtree = useCallback((subtree: THREE.Object3D, centerRef: THREE.Vector3) => {
       subtree.traverse((obj) => {
+        if (isInsideEditorElement(obj) || findStudioElementOwner(obj)) return;
         if ((obj as THREE.Mesh).isMesh) {
           const mesh = obj as THREE.Mesh;
           mesh.castShadow = !isSoftwareGlRef.current;
@@ -856,7 +1044,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const { gizmoMode: mode, gizmoSpace: space, snapGrid: gSnap, snapRotateDeg: rSnap } =
         propsRef.current;
 
-      if (mode === 'none' || !root) {
+      if (mode === 'none' || !root || lookingThroughCamRef.current) {
         tc.detach();
         requestRender();
         return;
@@ -975,6 +1163,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       root.updateMatrixWorld(true);
 
       root.traverse((obj) => {
+        if (isInsideEditorElement(obj) || findStudioElementOwner(obj)) return;
         if (!(obj as THREE.Mesh).isMesh) return;
         const mesh = obj as THREE.Mesh;
         const orig = originalMaterialsRef.current.get(mesh) ?? mesh.material;
@@ -1251,12 +1440,24 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       lockedNodesRef.current.clear();
       selectedNodeUuidRef.current = null;
       soloNodeUuidRef.current = null;
+      activeSceneCamUuidRef.current = null;
+      lookingThroughCamRef.current = false;
+      setLookingThroughCam(false);
       initialBoneQuatsRef.current.clear();
       onSelectedNodeChange(null);
       onSoloNodeChange(null);
+      onSelectedLightChange(null);
+      onSelectedCameraChange(null);
       onAnimationsChange([], 0, 0);
       onAnimationTimeChange(0, false);
-    }, [onAnimationsChange, onAnimationTimeChange, onSelectedNodeChange, onSoloNodeChange]);
+    }, [
+      onAnimationsChange,
+      onAnimationTimeChange,
+      onSelectedCameraChange,
+      onSelectedLightChange,
+      onSelectedNodeChange,
+      onSoloNodeChange,
+    ]);
 
     const mountModelObject = useCallback(
       (
@@ -1586,24 +1787,68 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       }
     }, [frameModel, setCameraPreset]);
 
+    const withHiddenEditorHelpers = useCallback(<T,>(fn: () => T): T => {
+      const hidden: Array<{ obj: THREE.Object3D; prev: boolean }> = [];
+      const root = activeModelRootRef.current;
+      if (root) {
+        root.traverse((obj) => {
+          if (obj.userData?.isEditorHelper) {
+            hidden.push({ obj, prev: obj.visible });
+            obj.visible = false;
+          }
+        });
+      }
+      const prevSelVis = selectionBoxRef.current?.visible ?? false;
+      const prevTcVis = transformHelperRef.current?.visible ?? false;
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+      if (transformHelperRef.current) transformHelperRef.current.visible = false;
+      try {
+        return fn();
+      } finally {
+        for (const item of hidden) {
+          item.obj.visible = item.prev;
+        }
+        if (selectionBoxRef.current) selectionBoxRef.current.visible = prevSelVis;
+        if (transformHelperRef.current) transformHelperRef.current.visible = prevTcVis;
+      }
+    }, []);
+
+    const getActiveSceneCameraPair = useCallback((): {
+      group: THREE.Object3D;
+      camera: THREE.PerspectiveCamera;
+    } | null => {
+      const root = activeModelRootRef.current;
+      if (!root) return null;
+      let target: THREE.Object3D | undefined;
+      if (activeSceneCamUuidRef.current) {
+        target = root.getObjectByProperty('uuid', activeSceneCamUuidRef.current) || undefined;
+      }
+      if (!target || target.userData?.studioElementType !== 'camera') {
+        root.traverse((obj) => {
+          if (!target && obj.userData?.studioElementType === 'camera') {
+            target = obj;
+          }
+        });
+      }
+      if (!target) return null;
+      const cam = findChildPerspectiveCamera(target);
+      if (!cam) return null;
+      return { group: target, camera: cam };
+    }, []);
+
     const captureSnapshot = useCallback(
-      (download = true): string | null => {
+      (download = false): string | null => {
         const renderer = rendererRef.current;
         const scene = sceneRef.current;
         const cam = activeCamRef.current;
         if (!renderer || !scene || !cam) return null;
 
-        const prevSelVis = selectionBoxRef.current?.visible ?? false;
-        const prevTcVis = transformHelperRef.current?.visible ?? false;
-        if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
-        if (transformHelperRef.current) transformHelperRef.current.visible = false;
+        const dataUrl = withHiddenEditorHelpers(() => {
+          renderer.setScissorTest(false);
+          renderer.render(scene, cam);
+          return renderer.domElement.toDataURL('image/png');
+        });
 
-        renderer.setScissorTest(false);
-        renderer.render(scene, cam);
-        const dataUrl = renderer.domElement.toDataURL('image/png');
-
-        if (selectionBoxRef.current) selectionBoxRef.current.visible = prevSelVis;
-        if (transformHelperRef.current) transformHelperRef.current.visible = prevTcVis;
         renderer.render(scene, cam);
 
         if (download) {
@@ -1613,12 +1858,41 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          onNotify('Saved studio PNG snapshot');
+          onNotify('Downloaded studio PNG snapshot');
         }
         return dataUrl;
       },
-      [onNotify]
+      [onNotify, withHiddenEditorHelpers]
     );
+
+    const captureActiveCameraSnapshot = useCallback((): string | null => {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const mainCam = activeCamRef.current;
+      const pair = getActiveSceneCameraPair();
+      if (!renderer || !scene || !pair) {
+        return captureSnapshot(false);
+      }
+
+      const w = renderer.domElement.clientWidth || 800;
+      const h = Math.max(1, renderer.domElement.clientHeight || 600);
+      pair.group.updateMatrixWorld(true);
+      pair.camera.aspect = w / h;
+      pair.camera.updateProjectionMatrix();
+
+      const dataUrl = withHiddenEditorHelpers(() => {
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
+        renderer.render(scene, pair.camera);
+        return renderer.domElement.toDataURL('image/png');
+      });
+
+      if (mainCam && !lookingThroughCamRef.current) {
+        renderer.render(scene, mainCam);
+      }
+      requestRender();
+      return dataUrl;
+    }, [captureSnapshot, getActiveSceneCameraPair, requestRender, withHiddenEditorHelpers]);
 
     // Captures 4 real studio angles (Hero 3/4, Front, Side, Top) without altering the user's camera!
     const captureMultiAngleScreenshots = useCallback((): CapturedScreenshot[] => {
@@ -1628,10 +1902,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const root = activeModelRootRef.current;
       if (!renderer || !scene || !mainCam) return [];
 
-      const box = root ? new THREE.Box3().setFromObject(root) : new THREE.Box3(
-        new THREE.Vector3(-0.8, 0, -0.8),
-        new THREE.Vector3(0.8, 1.4, 0.8)
-      );
+      const box = root
+        ? new THREE.Box3().setFromObject(root)
+        : new THREE.Box3(new THREE.Vector3(-0.8, 0, -0.8), new THREE.Vector3(0.8, 1.4, 0.8));
       const center = new THREE.Vector3();
       const size = new THREE.Vector3();
       box.getCenter(center);
@@ -1642,11 +1915,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const w = renderer.domElement.clientWidth || 800;
       const h = Math.max(1, renderer.domElement.clientHeight || 600);
       const snapCam = new THREE.PerspectiveCamera(40, w / h, 0.05, 120);
-
-      const prevSelVis = selectionBoxRef.current?.visible ?? false;
-      const prevTcVis = transformHelperRef.current?.visible ?? false;
-      if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
-      if (transformHelperRef.current) transformHelperRef.current.visible = false;
 
       const angles: Array<{
         angle: 'hero' | 'front' | 'side' | 'top';
@@ -1660,48 +1928,360 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       ];
 
       const stamp = new Date().toISOString();
-      const results: CapturedScreenshot[] = [];
+      const results = withHiddenEditorHelpers(() => {
+        const list: CapturedScreenshot[] = [];
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, w, h);
 
-      renderer.setScissorTest(false);
-      renderer.setViewport(0, 0, w, h);
+        for (const item of angles) {
+          const off = getBlenderPresetOffset(item.preset, dist);
+          snapCam.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
+          snapCam.lookAt(center);
+          snapCam.updateProjectionMatrix();
+          renderer.render(scene, snapCam);
+          list.push({
+            id: `vp-${item.angle}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            angle: item.angle,
+            label: item.label,
+            dataUrl: renderer.domElement.toDataURL('image/png'),
+            createdAt: stamp,
+            isLatest: true,
+            source: 'viewport',
+          });
+        }
+        return list;
+      });
 
-      for (const item of angles) {
-        const off = getBlenderPresetOffset(item.preset, dist);
-        snapCam.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
-        snapCam.lookAt(center);
-        snapCam.updateProjectionMatrix();
-        renderer.render(scene, snapCam);
-        results.push({
-          id: `vp-${item.angle}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-          angle: item.angle,
-          label: item.label,
-          dataUrl: renderer.domElement.toDataURL('image/png'),
-          createdAt: stamp,
-          source: 'viewport',
-        });
-      }
-
-      if (selectionBoxRef.current) selectionBoxRef.current.visible = prevSelVis;
-      if (transformHelperRef.current) transformHelperRef.current.visible = prevTcVis;
       renderer.render(scene, mainCam);
       requestRender();
       return results;
-    }, [requestRender]);
+    }, [requestRender, withHiddenEditorHelpers]);
+
+    const setActiveSceneCamera = useCallback(
+      (uuid: string | null) => {
+        activeSceneCamUuidRef.current = uuid;
+        const root = activeModelRootRef.current;
+        if (root) {
+          root.traverse((obj) => {
+            if (obj.userData?.studioElementType === 'camera') {
+              const cam = findChildPerspectiveCamera(obj);
+              const isAct = obj.uuid === uuid;
+              if (cam) {
+                rebuildCameraFrustumHelper(obj, cam.fov, isAct);
+              }
+              if (isAct) {
+                setActiveSceneCamLabel(obj.name || 'Scene_Camera');
+                setActiveSceneCamFocalMm(
+                  typeof obj.userData.focalLengthMm === 'number'
+                    ? obj.userData.focalLengthMm
+                    : Math.round(fovDegToFocalLengthMm(cam?.fov || 39.6))
+                );
+              }
+            }
+          });
+        }
+        if (!uuid && lookingThroughCamRef.current) {
+          lookingThroughCamRef.current = false;
+          setLookingThroughCam(false);
+          if (orbitRef.current) orbitRef.current.enabled = true;
+          syncTransformGizmo();
+        }
+        inspectActiveModel(captionModelName);
+        requestRender();
+      },
+      [captionModelName, inspectActiveModel, requestRender, syncTransformGizmo]
+    );
+
+    const toggleLookThroughCamera = useCallback(
+      (uuid?: string) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+
+        let targetUuid = uuid || activeSceneCamUuidRef.current;
+        if (targetUuid) {
+          const check = root.getObjectByProperty('uuid', targetUuid);
+          if (!check || check.userData?.studioElementType !== 'camera') {
+            targetUuid = null;
+          }
+        }
+        if (!targetUuid) {
+          const pair = getActiveSceneCameraPair();
+          if (pair) targetUuid = pair.group.uuid;
+        }
+        if (!targetUuid) {
+          onNotify('Add a Scene Camera in World tools first');
+          return;
+        }
+
+        const isSwitchingToSame = targetUuid === activeSceneCamUuidRef.current;
+        const nextLooking = isSwitchingToSame ? !lookingThroughCamRef.current : true;
+
+        activeSceneCamUuidRef.current = targetUuid;
+        lookingThroughCamRef.current = nextLooking;
+        setLookingThroughCam(nextLooking);
+
+        const targetObj = root.getObjectByProperty('uuid', targetUuid);
+        if (targetObj) {
+          setActiveSceneCamLabel(targetObj.name || 'Scene_Camera');
+          const cam = findChildPerspectiveCamera(targetObj);
+          setActiveSceneCamFocalMm(
+            typeof targetObj.userData.focalLengthMm === 'number'
+              ? targetObj.userData.focalLengthMm
+              : Math.round(fovDegToFocalLengthMm(cam?.fov || 39.6))
+          );
+        }
+
+        if (orbitRef.current) {
+          orbitRef.current.enabled = !nextLooking;
+        }
+        if (nextLooking) {
+          transformCtrlRef.current?.detach();
+          if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+          onNotify(`Looking through ${targetObj?.name || 'Scene_Camera'} (Numpad 0 to exit)`);
+        } else {
+          if (selectionBoxRef.current) selectionBoxRef.current.visible = true;
+          syncTransformGizmo();
+          onNotify('Exited Scene Camera view');
+        }
+
+        // Update frustum highlight colors across all scene cameras
+        root.traverse((obj) => {
+          if (obj.userData?.studioElementType === 'camera') {
+            const cam = findChildPerspectiveCamera(obj);
+            if (cam) rebuildCameraFrustumHelper(obj, cam.fov, obj.uuid === targetUuid);
+          }
+        });
+
+        // Immediately paint the switched camera view on the same frame
+        const renderer = rendererRef.current;
+        const scene = sceneRef.current;
+        const container = containerRef.current;
+        if (renderer && scene && container) {
+          const w = Math.max(1, container.clientWidth);
+          const h = Math.max(1, container.clientHeight);
+          renderer.setScissorTest(false);
+          renderer.setViewport(0, 0, w, h);
+          if (nextLooking) {
+            const pair = getActiveSceneCameraPair();
+            if (pair) {
+              pair.group.updateMatrixWorld(true);
+              pair.camera.aspect = w / h;
+              pair.camera.updateProjectionMatrix();
+              withHiddenEditorHelpers(() => {
+                renderer.render(scene, pair.camera);
+              });
+            }
+          } else if (activeCamRef.current) {
+            renderer.render(scene, activeCamRef.current);
+          }
+        }
+
+        inspectActiveModel(captionModelName);
+        requestRender();
+      },
+      [
+        captionModelName,
+        getActiveSceneCameraPair,
+        inspectActiveModel,
+        onNotify,
+        requestRender,
+        syncTransformGizmo,
+        withHiddenEditorHelpers,
+      ]
+    );
+
+    const alignCameraToCurrentView = useCallback(
+      (uuid?: string) => {
+        const root = activeModelRootRef.current;
+        const viewportCam = activeCamRef.current;
+        if (!root || !viewportCam) return;
+
+        let targetObj: THREE.Object3D | null = null;
+        if (uuid) {
+          targetObj = root.getObjectByProperty('uuid', uuid) || null;
+        } else if (selectedNodeUuidRef.current) {
+          const sel = root.getObjectByProperty('uuid', selectedNodeUuidRef.current);
+          if (sel?.userData?.studioElementType === 'camera') targetObj = sel;
+        }
+        if (!targetObj) {
+          const pair = getActiveSceneCameraPair();
+          targetObj = pair?.group || null;
+        }
+        if (!targetObj || targetObj.userData?.studioElementType !== 'camera') {
+          onNotify('Add or select a Scene Camera first');
+          return;
+        }
+
+        const worldPos = new THREE.Vector3();
+        const worldQuat = new THREE.Quaternion();
+        viewportCam.getWorldPosition(worldPos);
+        viewportCam.getWorldQuaternion(worldQuat);
+
+        if (targetObj.parent) {
+          targetObj.parent.updateMatrixWorld(true);
+          const localPos = targetObj.parent.worldToLocal(worldPos.clone());
+          const parentQuat = new THREE.Quaternion();
+          targetObj.parent.getWorldQuaternion(parentQuat);
+          targetObj.position.copy(localPos);
+          targetObj.quaternion.copy(parentQuat.invert().multiply(worldQuat));
+        } else {
+          targetObj.position.copy(worldPos);
+          targetObj.quaternion.copy(worldQuat);
+        }
+        targetObj.updateMatrixWorld(true);
+        updateSelectionBox();
+        inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Aligned ${targetObj.name} to current viewport view`);
+      },
+      [
+        captionModelName,
+        getActiveSceneCameraPair,
+        inspectActiveModel,
+        onNotify,
+        requestRender,
+        updateSelectionBox,
+      ]
+    );
+
+    const updateLightProperties = useCallback(
+      (uuid: string, patch: Partial<Omit<SelectedLightInfo, 'uuid' | 'name' | 'lightKind'>>) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const obj = root.getObjectByProperty('uuid', uuid);
+        if (!obj || obj.userData?.studioElementType !== 'light') return;
+        const light = findChildLight(obj);
+        if (!light) return;
+
+        if (typeof patch.color === 'string') {
+          light.color.set(patch.color);
+          // Sync emissive/basic bulb color inside helper meshes
+          obj.traverse((child) => {
+            if (child.userData?.isEditorHelper && (child as THREE.Mesh).isMesh) {
+              const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
+              if (mat?.color) mat.color.set(patch.color!);
+            }
+          });
+        }
+        if (typeof patch.intensity === 'number' && Number.isFinite(patch.intensity)) {
+          light.intensity = Math.max(0, patch.intensity);
+        }
+        if (typeof patch.castShadow === 'boolean' && !isSoftwareGlRef.current) {
+          if (
+            (light as THREE.PointLight).isPointLight ||
+            (light as THREE.SpotLight).isSpotLight ||
+            (light as THREE.DirectionalLight).isDirectionalLight
+          ) {
+            light.castShadow = patch.castShadow;
+          }
+        }
+        if ((light as THREE.PointLight).isPointLight) {
+          const pt = light as THREE.PointLight;
+          if (typeof patch.distance === 'number') pt.distance = Math.max(0, patch.distance);
+          if (typeof patch.decay === 'number') pt.decay = Math.max(0, patch.decay);
+        }
+        if ((light as THREE.SpotLight).isSpotLight) {
+          const sp = light as THREE.SpotLight;
+          if (typeof patch.distance === 'number') sp.distance = Math.max(0, patch.distance);
+          if (typeof patch.decay === 'number') sp.decay = Math.max(0, patch.decay);
+          if (typeof patch.angleDeg === 'number') {
+            sp.angle = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(patch.angleDeg, 8, 85));
+            rebuildSpotLightConeHelper(obj);
+          }
+          if (typeof patch.penumbra === 'number') {
+            sp.penumbra = THREE.MathUtils.clamp(patch.penumbra, 0, 1);
+          }
+        }
+        if (obj.userData.lightKind === 'area') {
+          const nextW =
+            typeof patch.width === 'number'
+              ? Math.max(0.2, patch.width)
+              : (obj.userData.areaWidth as number) || 2.0;
+          const nextH =
+            typeof patch.height === 'number'
+              ? Math.max(0.2, patch.height)
+              : (obj.userData.areaHeight as number) || 1.2;
+          obj.userData.areaWidth = nextW;
+          obj.userData.areaHeight = nextH;
+          if ((light as THREE.RectAreaLight).isRectAreaLight) {
+            (light as THREE.RectAreaLight).width = nextW;
+            (light as THREE.RectAreaLight).height = nextH;
+          }
+          rebuildAreaLightFrameHelper(obj, nextW, nextH, `#${light.color.getHexString()}`);
+        }
+
+        inspectActiveModel(captionModelName);
+        requestRender();
+      },
+      [captionModelName, inspectActiveModel, requestRender]
+    );
+
+    const updateCameraProperties = useCallback(
+      (uuid: string, patch: Partial<Pick<SelectedCameraInfo, 'focalLengthMm' | 'near' | 'far'>>) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const obj = root.getObjectByProperty('uuid', uuid);
+        if (!obj || obj.userData?.studioElementType !== 'camera') return;
+        const cam = findChildPerspectiveCamera(obj);
+        if (!cam) return;
+
+        if (typeof patch.focalLengthMm === 'number' && Number.isFinite(patch.focalLengthMm)) {
+          const clampedMm = THREE.MathUtils.clamp(patch.focalLengthMm, 12, 250);
+          obj.userData.focalLengthMm = clampedMm;
+          cam.fov = focalLengthMmToFovDeg(clampedMm);
+          rebuildCameraFrustumHelper(obj, cam.fov, obj.uuid === activeSceneCamUuidRef.current);
+          if (obj.uuid === activeSceneCamUuidRef.current) {
+            setActiveSceneCamFocalMm(Math.round(clampedMm));
+          }
+        }
+        if (typeof patch.near === 'number' && patch.near > 0.005) {
+          cam.near = patch.near;
+        }
+        if (typeof patch.far === 'number' && patch.far > cam.near + 0.5) {
+          cam.far = patch.far;
+        }
+        cam.updateProjectionMatrix();
+        inspectActiveModel(captionModelName);
+        requestRender();
+      },
+      [captionModelName, inspectActiveModel, requestRender]
+    );
 
     // Blender World Assembly Operations
     const addWorldPrimitive = useCallback(
       (kind: WorldPrimitiveKind) => {
         const root = ensureWorldRoot();
         const idx = primitiveCounterRef.current++;
-        const obj = createWorldPrimitive(kind, idx);
-        // Offset slightly if stage already has objects so new primitives don't stack invisibly
-        if (root.children.length > 0 && kind !== 'terrain' && kind !== 'plane' && kind !== 'water') {
+        const obj = createWorldPrimitive(kind, idx, { isSoftwareGl: isSoftwareGlRef.current });
+        // Offset slightly if stage already has objects so new mesh primitives don't stack invisibly
+        if (
+          root.children.length > 0 &&
+          kind !== 'terrain' &&
+          kind !== 'plane' &&
+          kind !== 'water' &&
+          kind !== 'sun-light' &&
+          kind !== 'scene-camera'
+        ) {
           const ring = ((idx - 1) % 6) * (Math.PI / 3);
           obj.position.x += Math.cos(ring) * 1.15;
           obj.position.z += Math.sin(ring) * 1.15;
         }
         root.add(obj);
-        registerMeshesInSubtree(obj, modelCenterRef.current);
+
+        if (kind === 'scene-camera') {
+          if (!activeSceneCamUuidRef.current) {
+            activeSceneCamUuidRef.current = obj.uuid;
+            setActiveSceneCamLabel(obj.name || 'Scene_Camera');
+            setActiveSceneCamFocalMm(
+              typeof obj.userData.focalLengthMm === 'number' ? obj.userData.focalLengthMm : 50
+            );
+            const cam = findChildPerspectiveCamera(obj);
+            if (cam) rebuildCameraFrustumHelper(obj, cam.fov, true);
+          }
+        } else {
+          registerMeshesInSubtree(obj, modelCenterRef.current);
+        }
+
         applyVisualMaterials();
         selectNode(obj.uuid);
         onNotify(`Added ${obj.name} to World`);
@@ -1744,6 +2324,14 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       if (lockedNodesRef.current.has(target.uuid)) {
         onNotify(`${target.name} is locked`);
         return;
+      }
+      if (target.uuid === activeSceneCamUuidRef.current) {
+        activeSceneCamUuidRef.current = null;
+        if (lookingThroughCamRef.current) {
+          lookingThroughCamRef.current = false;
+          setLookingThroughCam(false);
+          if (orbitRef.current) orbitRef.current.enabled = true;
+        }
       }
       transformCtrlRef.current?.detach();
       target.parent.remove(target);
@@ -1869,9 +2457,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         zoomBy,
         resetView,
         captureSnapshot,
+        captureActiveCameraSnapshot,
         captureMultiAngleScreenshots,
         getActiveModelRoot: () => activeModelRootRef.current,
         selectNode,
+        updateLightProperties,
+        updateCameraProperties,
+        setActiveSceneCamera,
+        toggleLookThroughCamera,
+        alignCameraToCurrentView,
         toggleNodeVisibility: (uuid: string) => {
           const root = activeModelRootRef.current;
           const node = root?.getObjectByProperty('uuid', uuid);
@@ -2064,11 +2658,13 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       }),
       [
         addWorldPrimitive,
+        alignCameraToCurrentView,
         appendModelFromUrl,
         applyArrayModifier,
         applyScatterModifier,
         applyVisualMaterials,
         captionModelName,
+        captureActiveCameraSnapshot,
         captureMultiAngleScreenshots,
         captureSnapshot,
         clearToPointCloud,
@@ -2086,11 +2682,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         requestRender,
         resetView,
         selectNode,
+        setActiveSceneCamera,
         setCameraPreset,
         snapSelectedToGround,
         syncTransformGizmo,
+        toggleLookThroughCamera,
         toggleOrtho,
         toggleSelectedFlatShading,
+        updateCameraProperties,
+        updateLightProperties,
         updateSelectionBox,
         updateWorldEnvironment,
         zoomBy,
@@ -2118,6 +2718,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const glRenderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
       const isSw = /SwiftShader|llvmpipe|Software|Mesa OffScreen/i.test(glRenderer);
       isSoftwareGlRef.current = isSw;
+      if (!isSw) {
+        RectAreaLightUniformsLib.init();
+      }
 
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isSw ? 1.5 : 2));
       renderer.setSize(container.clientWidth, container.clientHeight);
@@ -2543,6 +3146,22 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             renderer.render(scene, quadRight);
 
             renderer.setScissorTest(false);
+          } else if (lookingThroughCamRef.current) {
+            const pair = getActiveSceneCameraPair();
+            if (pair) {
+              pair.group.updateMatrixWorld(true);
+              pair.camera.aspect = w / h;
+              pair.camera.updateProjectionMatrix();
+              withHiddenEditorHelpers(() => {
+                renderer.setScissorTest(false);
+                renderer.setViewport(0, 0, w, h);
+                renderer.render(scene, pair.camera);
+              });
+            } else {
+              renderer.setScissorTest(false);
+              renderer.setViewport(0, 0, w, h);
+              renderer.render(scene, cam);
+            }
           } else {
             renderer.setScissorTest(false);
             renderer.setViewport(0, 0, w, h);
@@ -2708,9 +3327,21 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         } else if (e.code === 'Numpad5') {
           e.preventDefault();
           toggleOrtho();
-        } else if (e.code === 'Numpad0' || e.code === 'NumpadDecimal') {
+        } else if (e.code === 'Numpad0') {
+          e.preventDefault();
+          if (e.ctrlKey && e.altKey) {
+            alignCameraToCurrentView();
+          } else if (getActiveSceneCameraPair()) {
+            toggleLookThroughCamera();
+          } else {
+            resetView();
+          }
+        } else if (e.code === 'NumpadDecimal') {
           e.preventDefault();
           resetView();
+        } else if (e.key === 'Escape' && lookingThroughCamRef.current) {
+          e.preventDefault();
+          toggleLookThroughCamera();
         } else if (
           e.code === 'Numpad4' ||
           e.code === 'Numpad6' ||
@@ -2763,7 +3394,18 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
-    }, [deleteSelected, duplicateSelected, onGizmoModeChange, requestRender, resetView, setCameraPreset, toggleOrtho]);
+    }, [
+      alignCameraToCurrentView,
+      deleteSelected,
+      duplicateSelected,
+      getActiveSceneCameraPair,
+      onGizmoModeChange,
+      requestRender,
+      resetView,
+      setCameraPreset,
+      toggleLookThroughCamera,
+      toggleOrtho,
+    ]);
 
     // Canvas click for Raycast Select & 2-Point Measure Tape
     const handleCanvasPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -2788,8 +3430,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       if (mode === 'select') {
         if (hits.length > 0) {
           const hitObj = hits[0].object;
-          selectNode(hitObj.uuid);
-          onNotify(`Selected ${hitObj.name || hitObj.type}`);
+          const studioOwner = findStudioElementOwner(hitObj);
+          const resolved = studioOwner || hitObj;
+          selectNode(resolved.uuid);
+          onNotify(`Selected ${resolved.name || resolved.type}`);
         } else {
           selectNode(null);
         }
@@ -2924,6 +3568,52 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
               </button>
             </div>
           </div>
+        )}
+
+        {/* SCENE CAMERA VIEWFINDER OVERLAY (Blender Numpad 0 Mode) */}
+        {lookingThroughCam && (
+          <>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-6 z-10 rounded-xl border border-[#2D5A4C]/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.45)]"
+            />
+            <div className="atelier-surface animate-atelier-popover absolute top-5 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-xl px-3 py-1.5 text-[11.5px]">
+              <Video className="h-3.5 w-3.5 text-[#2D5A4C]" />
+              <span className="font-medium text-[#1C1B19]">{activeSceneCamLabel}</span>
+              <span className="font-mono text-[10.5px] text-[#6E6960]">{activeSceneCamFocalMm}mm</span>
+              <div className="mx-0.5 h-4 w-px bg-[#E5E1DA]" />
+              <button
+                type="button"
+                onClick={() => {
+                  const shot = captureActiveCameraSnapshot();
+                  if (shot) onCaptureViewportToRepo(shot, 'camera');
+                }}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#2D5A4C] px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#22453A]"
+              >
+                <CloudUpload className="h-3 w-3" />
+                Save Shot to Repo
+              </button>
+              <button
+                type="button"
+                onClick={() => alignCameraToCurrentView()}
+                title="Align camera to viewport (Ctrl+Alt+0)"
+                className="inline-flex items-center gap-1 rounded-lg border border-[#E2DDD4] bg-[#FAF9F6] px-2 py-1 text-[11px] font-medium text-[#5A564F] transition-colors hover:text-[#1C1B19]"
+              >
+                <Crosshair className="h-3 w-3" />
+                Align
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleLookThroughCamera()}
+                title="Exit Scene Camera (Numpad 0 / Esc)"
+                aria-label="Exit scene camera view"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-[#6E6960] transition-colors hover:bg-[#F5F3EF] hover:text-[#1C1B19]"
+              >
+                <X className="h-3.5 w-3.5" />
+                Exit
+              </button>
+            </div>
+          </>
         )}
 
         {/* MEASUREMENT OVERLAY */}
@@ -3407,9 +4097,16 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
               <button
                 type="button"
-                onClick={() => captureSnapshot(true)}
-                title="Capture PNG Snapshot (F12)"
-                aria-label="Capture PNG snapshot"
+                onClick={() => {
+                  const dataUrl = lookingThroughCam
+                    ? captureActiveCameraSnapshot()
+                    : captureSnapshot(false);
+                  if (dataUrl) {
+                    onCaptureViewportToRepo(dataUrl, lookingThroughCam ? 'camera' : 'viewport');
+                  }
+                }}
+                title="Save Latest Screenshot to Repo Assets (F12 · No Auto-Download)"
+                aria-label="Save latest screenshot to repo assets"
                 className="flex items-center gap-1 rounded-xl px-2 py-1.5 text-[12px] font-medium text-[#5A564F] transition-colors hover:bg-[#F5F3EF] hover:text-[#1C1B19]"
               >
                 <Camera className="h-3.5 w-3.5" />
