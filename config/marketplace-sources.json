@@ -8,7 +8,7 @@
       "name": "Smutba",
       "url": "https://smutba.se/",
       "adapter": "auto",
-      "enabled": true,
+      "enabled": false,
       "maxModels": 60,
       "license": "Open Source",
       "description": "User-configured open-source 3D model website (smutba.se).",
