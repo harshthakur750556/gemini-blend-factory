@@ -2,17 +2,5 @@
   "description": "Open-source 3D model websites scraped by the BlendFactory Studio Model Marketplace. Add any public 3D website URL (any TLD like .com, .org, .io, .net, .se, .co, etc.) here or from the Marketplace Sources drawer.",
   "defaultDownloadTarget": "repo",
   "defaultRenderViaGitHubCompute": true,
-  "sources": [
-    {
-      "id": "https-open3dlab-com",
-      "name": "https://open3dlab.com/",
-      "url": "https://open3dlab.com/",
-      "adapter": "auto",
-      "enabled": true,
-      "maxModels": 60,
-      "license": "Open Source",
-      "description": "User-configured open-source 3D model website (open3dlab.com).",
-      "addedAt": "2026-11-27T13:12:26.440Z"
-    }
-  ]
+  "sources": []
 }
