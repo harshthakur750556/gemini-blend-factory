@@ -1,0 +1,31 @@
+{
+  "slug": "duck",
+  "name": "Duck",
+  "group": "Props",
+  "originalCategory": "Core",
+  "creator": "Khronos Group Contributors",
+  "license": "CC0 / CC-BY / MIT",
+  "description": "The COLLADA duck. One texture.\n\nDisplay in SampleViewer Download GLB Model Directory\n\nA rubber ducky bath toy.\n\n&copy; 2006, Sony. SCEA Shared Source License, Version 1.0",
+  "source": "marketplace",
+  "sourceName": "Khronos glTF Sample Assets",
+  "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets",
+  "sourceDetailUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Duck",
+  "fileName": "duck.glb",
+  "format": ".glb",
+  "sizeBytes": 120484,
+  "buildPy": "models/duck/build.py",
+  "updatedAt": "2026-11-27T12:38:19.500Z",
+  "latestScreenshots": {
+    "updatedAt": "2026-11-27T12:38:19.500Z",
+    "revision": 1,
+    "latestPrimary": "models/duck/screenshots/latest_hero.png",
+    "files": [
+      {
+        "name": "latest_hero.png",
+        "angle": "hero",
+        "path": "models/duck/screenshots/latest_hero.png",
+        "updatedAt": "2026-11-27T12:38:19.500Z"
+      }
+    ]
+  }
+}
