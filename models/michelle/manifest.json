@@ -1,0 +1,10 @@
+{
+  "slug": "michelle",
+  "name": "Michelle",
+  "group": "Female_Characters",
+  "source": "threejs-official-sample",
+  "license": "MIT / Mixamo Sample",
+  "modelFile": "/models/michelle.glb",
+  "previewUrl": "/models/previews/michelle.png",
+  "description": "Rigged and animated stylized female character model from the official Three.js glTF sample collection."
+}

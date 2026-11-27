@@ -208,7 +208,7 @@ export const WorkbenchSheet: React.FC<WorkbenchSheetProps> = ({
   return (
     <aside
       aria-label="Blender Pipeline & AI Harness Workbench"
-      className="atelier-surface animate-atelier-sheet fixed top-16 right-4 bottom-20 z-30 flex w-[452px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl"
+      className="atelier-surface animate-atelier-sheet fixed inset-x-2 top-14 bottom-2 z-30 flex flex-col overflow-hidden rounded-2xl sm:left-auto sm:top-16 sm:right-3 sm:bottom-20 sm:w-[440px]"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[#EFECE6] px-4 py-3">

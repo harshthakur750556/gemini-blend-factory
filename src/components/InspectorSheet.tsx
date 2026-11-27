@@ -15,6 +15,7 @@ import {
   EyeOff,
   Flashlight,
   FlipHorizontal2,
+  FolderPlus,
   Globe,
   Grid2X2,
   Landmark,
@@ -23,6 +24,7 @@ import {
   Maximize2,
   Mountain,
   Move,
+  Paintbrush,
   Pause,
   Play,
   Plus,
@@ -37,7 +39,9 @@ import {
   Square,
   Sun,
   Trash2,
+  Trees,
   Triangle,
+  Ungroup,
   Unlock,
   Video,
   Waves,
@@ -52,15 +56,23 @@ import type {
   InsideOutSide,
   InspectorTabId,
   MaterialChannelInfo,
+  MaterialEditPayload,
   OutlinerNode,
+  PhysicsConfig,
+  ScatterBrushConfig,
+  ScatterBrushPreset,
   SceneTelemetry,
   SectionCutConfig,
   SelectedCameraInfo,
   SelectedLightInfo,
   StudioLightingPreset,
   SurfaceParams,
+  TerrainBrushConfig,
+  TerrainBrushMode,
+  TerrainPaintLayer,
   TopologyDiagnostics,
   TransformInfo,
+  ViewportToolMode,
   WorldEnvironmentPreset,
   WorldPrimitiveKind,
 } from '../types';
@@ -94,12 +106,39 @@ interface InspectorSheetProps {
   gizmoSpace: GizmoSpace;
   snapGrid: number;
   snapRotateDeg: number;
+  snapScale: number;
   worldEnvPreset: WorldEnvironmentPreset;
   worldFogDensity: number;
+  worldFogHeight: number;
+  sunElevationDeg: number;
+  shadowsEnabled: boolean;
+  cameraFov: number;
+  cameraSpeed: number;
+  activeToolMode: ViewportToolMode;
+  terrainBrush: TerrainBrushConfig;
+  scatterBrush: ScatterBrushConfig;
+  physicsConfig: PhysicsConfig;
+  playModeActive: boolean;
   onGizmoModeChange: (mode: GizmoMode) => void;
   onGizmoSpaceChange: (space: GizmoSpace) => void;
   onSnapGridChange: (snap: number) => void;
   onSnapRotateChange: (deg: number) => void;
+  onSnapScaleChange: (snap: number) => void;
+  onSunElevationChange: (deg: number) => void;
+  onToggleShadows: () => void;
+  onWorldFogHeightChange: (h: number) => void;
+  onCameraFovChange: (fov: number) => void;
+  onCameraSpeedChange: (speed: number) => void;
+  onActiveToolModeChange: (mode: ViewportToolMode) => void;
+  onTerrainBrushChange: (cfg: TerrainBrushConfig) => void;
+  onScatterBrushChange: (cfg: ScatterBrushConfig) => void;
+  onPhysicsConfigChange: (cfg: PhysicsConfig) => void;
+  onResetPhysics: () => void;
+  onTogglePlayMode: () => void;
+  onEditMaterial: (payload: MaterialEditPayload) => void;
+  onSaveTexturesToRepo: () => void;
+  onGroupSelected: () => void;
+  onUnparentNode: (uuid: string) => void;
   onAddPrimitive: (kind: WorldPrimitiveKind) => void;
   onOpenLibraryToAppend: () => void;
   onDuplicateSelected: () => void;
@@ -208,6 +247,32 @@ const WORLD_ENV_OPTIONS: Array<{ id: WorldEnvironmentPreset; label: string }> = 
   { id: 'courtyard', label: 'Courtyard' },
   { id: 'meadow', label: 'Meadow' },
   { id: 'desert', label: 'Desert' },
+  { id: 'celestial', label: 'Celestial Sky' },
+];
+
+const TERRAIN_SCULPT_MODES: Array<{ id: TerrainBrushMode; label: string }> = [
+  { id: 'raise', label: 'Raise' },
+  { id: 'lower', label: 'Lower (Y<0)' },
+  { id: 'smooth', label: 'Smooth' },
+  { id: 'flatten', label: 'Flatten' },
+  { id: 'noise', label: 'Noise' },
+];
+
+const TERRAIN_PAINT_LAYERS: Array<{ id: TerrainPaintLayer; label: string; hex: string }> = [
+  { id: 'grass', label: 'Grass', hex: '#5D8742' },
+  { id: 'moss', label: 'Moss', hex: '#3D7856' },
+  { id: 'basalt', label: 'Basalt', hex: '#4B5563' },
+  { id: 'sand', label: 'Sand', hex: '#D4B483' },
+  { id: 'snow', label: 'Snow', hex: '#EAF2F8' },
+  { id: 'cave_dirt', label: 'Cave', hex: '#4A3B31' },
+];
+
+const SCATTER_PRESETS: Array<{ id: ScatterBrushPreset; label: string }> = [
+  { id: 'pine-tree', label: 'Pine' },
+  { id: 'boulder', label: 'Boulder' },
+  { id: 'crystal', label: 'Crystal' },
+  { id: 'grass-tuft', label: 'Grass' },
+  { id: 'pillar', label: 'Pillar' },
 ];
 
 const MaterialPreviewSphere: React.FC<{ params: SurfaceParams }> = ({ params }) => {
@@ -324,12 +389,39 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   gizmoSpace,
   snapGrid,
   snapRotateDeg,
+  snapScale,
   worldEnvPreset,
   worldFogDensity,
+  worldFogHeight,
+  sunElevationDeg,
+  shadowsEnabled,
+  cameraFov,
+  cameraSpeed,
+  activeToolMode,
+  terrainBrush,
+  scatterBrush,
+  physicsConfig,
+  playModeActive,
   onGizmoModeChange,
   onGizmoSpaceChange,
   onSnapGridChange,
   onSnapRotateChange,
+  onSnapScaleChange,
+  onSunElevationChange,
+  onToggleShadows,
+  onWorldFogHeightChange,
+  onCameraFovChange,
+  onCameraSpeedChange,
+  onActiveToolModeChange,
+  onTerrainBrushChange,
+  onScatterBrushChange,
+  onPhysicsConfigChange,
+  onResetPhysics,
+  onTogglePlayMode,
+  onEditMaterial,
+  onSaveTexturesToRepo,
+  onGroupSelected,
+  onUnparentNode,
   onAddPrimitive,
   onOpenLibraryToAppend,
   onDuplicateSelected,
@@ -374,6 +466,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   const [arrayOffsetZ, setArrayOffsetZ] = useState(0);
   const [scatterCount, setScatterCount] = useState(6);
   const [scatterRadius, setScatterRadius] = useState(3.2);
+  const [editingMaterialUuid, setEditingMaterialUuid] = useState<string | null>(null);
 
   const filteredNodes = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -751,7 +844,7 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
   return (
     <aside
       aria-label="Scene & World Inspector"
-      className="atelier-surface animate-atelier-sheet fixed top-16 right-4 bottom-20 z-30 flex w-[364px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl"
+      className="atelier-surface animate-atelier-sheet fixed inset-x-2 top-14 bottom-2 z-30 flex flex-col overflow-hidden rounded-2xl sm:left-auto sm:top-16 sm:right-3 sm:bottom-20 sm:w-[360px]"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[#EFECE6] px-4 py-3">
@@ -954,6 +1047,49 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               )}
             </div>
 
+            {/* Outliner Hierarchy Quick Actions (Group / Unparent / Duplicate / Delete) */}
+            <div className="grid grid-cols-4 gap-1">
+              <button
+                type="button"
+                onClick={onGroupSelected}
+                disabled={!selectedNodeUuid}
+                title="Wrap selected node in a parent Group"
+                className="flex items-center justify-center gap-1 rounded-lg border border-[#E5E1DA] bg-white py-1.5 text-[10.5px] font-medium text-[#1C1B19] transition-colors hover:border-[#2D5A4C] hover:bg-[#F4F9F6] disabled:opacity-40"
+              >
+                <FolderPlus className="h-3 w-3 text-[#2D5A4C]" />
+                Group
+              </button>
+              <button
+                type="button"
+                onClick={() => selectedNodeUuid && onUnparentNode(selectedNodeUuid)}
+                disabled={!selectedNodeUuid}
+                title="Unparent selected node to scene root"
+                className="flex items-center justify-center gap-1 rounded-lg border border-[#E5E1DA] bg-white py-1.5 text-[10.5px] font-medium text-[#1C1B19] transition-colors hover:border-[#2D5A4C] hover:bg-[#F4F9F6] disabled:opacity-40"
+              >
+                <Ungroup className="h-3 w-3 text-[#2D5A4C]" />
+                Unparent
+              </button>
+              <button
+                type="button"
+                onClick={onDuplicateSelected}
+                title="Duplicate selected node (Shift+D)"
+                className="flex items-center justify-center gap-1 rounded-lg border border-[#E5E1DA] bg-white py-1.5 text-[10.5px] font-medium text-[#1C1B19] transition-colors hover:border-[#2D5A4C] hover:bg-[#F4F9F6]"
+              >
+                <Copy className="h-3 w-3 text-[#2D5A4C]" />
+                Clone
+              </button>
+              <button
+                type="button"
+                onClick={onDeleteSelected}
+                disabled={!selectedNodeUuid}
+                title="Delete selected node (Delete)"
+                className="flex items-center justify-center gap-1 rounded-lg border border-[#EBD2D3] bg-[#FDF6F6] py-1.5 text-[10.5px] font-medium text-[#9E3134] transition-colors hover:bg-[#FAEAEA] disabled:opacity-40"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </button>
+            </div>
+
             {renderLightPropertiesCard()}
             {renderCameraPropertiesCard()}
 
@@ -1136,24 +1272,37 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                     value={snapGrid}
                     onChange={(e) => onSnapGridChange(Number(e.target.value))}
                     aria-label="Grid snap increment"
-                    className="flex-1 rounded-lg border border-[#E5E1DA] bg-white px-2 py-1.5 font-mono text-[10.5px] text-[#1C1B19] outline-none focus:border-[#2D5A4C]"
+                    className="flex-1 rounded-lg border border-[#E5E1DA] bg-white px-1.5 py-1.5 font-mono text-[10px] text-[#1C1B19] outline-none focus:border-[#2D5A4C]"
                   >
                     <option value={0}>Grid: Free</option>
-                    <option value={0.1}>Snap 0.1m</option>
-                    <option value={0.25}>Snap 0.25m</option>
-                    <option value={0.5}>Snap 0.5m</option>
-                    <option value={1}>Snap 1.0m</option>
+                    <option value={0.1}>0.1m</option>
+                    <option value={0.25}>0.25m</option>
+                    <option value={0.5}>0.5m</option>
+                    <option value={1}>1.0m</option>
                   </select>
                   <button
                     type="button"
                     onClick={() => onSnapRotateChange(snapRotateDeg === 15 ? 0 : 15)}
-                    className={`rounded-lg border px-2 py-1.5 font-mono text-[10.5px] font-medium transition-colors ${
+                    title="Toggle 15° rotation snap"
+                    className={`rounded-lg border px-1.5 py-1.5 font-mono text-[10px] font-medium transition-colors ${
                       snapRotateDeg === 15
                         ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
                         : 'border-[#E5E1DA] bg-white text-[#6E6960]'
                     }`}
                   >
                     15°
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSnapScaleChange(snapScale > 0 ? 0 : 0.25)}
+                    title="Toggle 0.25× scale snap"
+                    className={`rounded-lg border px-1.5 py-1.5 font-mono text-[10px] font-medium transition-colors ${
+                      snapScale > 0
+                        ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                        : 'border-[#E5E1DA] bg-white text-[#6E6960]'
+                    }`}
+                  >
+                    .25×
                   </button>
                 </div>
               </div>
@@ -1389,18 +1538,334 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </div>
             </div>
 
-            {/* World Atmosphere & Environment */}
+            {/* Open-World Terrain Sculpting & Multi-Layer Ground Paint */}
             <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">
-              <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
-                World Sky & Fog
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  <Mountain className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                  Terrain Sculpt & Paint
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onAddPrimitive('terrain')}
+                  className="text-[10.5px] font-medium text-[#2D5A4C] hover:underline"
+                >
+                  + Spawn Terrain
+                </button>
               </div>
+
+              <div className="grid grid-cols-3 gap-1">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onActiveToolModeChange(
+                      activeToolMode === 'terrain-sculpt' ? 'orbit' : 'terrain-sculpt'
+                    )
+                  }
+                  className={`flex items-center justify-center gap-1 rounded-lg border py-1.5 text-[11px] font-medium transition-colors ${
+                    activeToolMode === 'terrain-sculpt'
+                      ? 'border-[#2D5A4C] bg-[#2D5A4C] text-white'
+                      : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#1C1B19] hover:border-[#2D5A4C]'
+                  }`}
+                >
+                  <Mountain className="h-3 w-3" />
+                  Sculpt
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onActiveToolModeChange(
+                      activeToolMode === 'terrain-paint' ? 'orbit' : 'terrain-paint'
+                    )
+                  }
+                  className={`flex items-center justify-center gap-1 rounded-lg border py-1.5 text-[11px] font-medium transition-colors ${
+                    activeToolMode === 'terrain-paint'
+                      ? 'border-[#2D5A4C] bg-[#2D5A4C] text-white'
+                      : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#1C1B19] hover:border-[#2D5A4C]'
+                  }`}
+                >
+                  <Paintbrush className="h-3 w-3" />
+                  Paint
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onActiveToolModeChange(
+                      activeToolMode === 'scatter-brush' ? 'orbit' : 'scatter-brush'
+                    )
+                  }
+                  className={`flex items-center justify-center gap-1 rounded-lg border py-1.5 text-[11px] font-medium transition-colors ${
+                    activeToolMode === 'scatter-brush'
+                      ? 'border-[#2D5A4C] bg-[#2D5A4C] text-white'
+                      : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#1C1B19] hover:border-[#2D5A4C]'
+                  }`}
+                >
+                  <Trees className="h-3 w-3" />
+                  Scatter
+                </button>
+              </div>
+
+              {activeToolMode === 'terrain-sculpt' && (
+                <div className="space-y-2 rounded-lg border border-[#EAE5DC] bg-[#FAF9F6] p-2.5">
+                  <div className="grid grid-cols-3 gap-1">
+                    {TERRAIN_SCULPT_MODES.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => onTerrainBrushChange({ ...terrainBrush, mode: m.id })}
+                        className={`rounded-md border py-1 text-[10.5px] font-medium transition-colors ${
+                          terrainBrush.mode === m.id
+                            ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                            : 'border-[#E2DDD4] bg-white text-[#5A564F]'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                        <span>Radius</span>
+                        <span className="font-mono">{terrainBrush.radius.toFixed(1)}m</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.6}
+                        max={12}
+                        step={0.2}
+                        value={terrainBrush.radius}
+                        onChange={(e) =>
+                          onTerrainBrushChange({ ...terrainBrush, radius: parseFloat(e.target.value) })
+                        }
+                        className="atelier-range w-full"
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                        <span>Strength</span>
+                        <span className="font-mono">{terrainBrush.strength.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={1.5}
+                        step={0.05}
+                        value={terrainBrush.strength}
+                        onChange={(e) =>
+                          onTerrainBrushChange({ ...terrainBrush, strength: parseFloat(e.target.value) })
+                        }
+                        className="atelier-range w-full"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-[#6E6960]">
+                    Drag on terrain to sculpt (supports caves & valleys below Y = 0). Press Esc to exit.
+                  </p>
+                </div>
+              )}
+
+              {activeToolMode === 'terrain-paint' && (
+                <div className="space-y-2 rounded-lg border border-[#EAE5DC] bg-[#FAF9F6] p-2.5">
+                  <div className="grid grid-cols-3 gap-1">
+                    {TERRAIN_PAINT_LAYERS.map((layer) => (
+                      <button
+                        key={layer.id}
+                        type="button"
+                        onClick={() => onTerrainBrushChange({ ...terrainBrush, paintLayer: layer.id })}
+                        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10.5px] font-medium transition-colors ${
+                          terrainBrush.paintLayer === layer.id
+                            ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                            : 'border-[#E2DDD4] bg-white text-[#5A564F]'
+                        }`}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full border border-[#C6C0B6]"
+                          style={{ backgroundColor: layer.hex }}
+                        />
+                        {layer.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div>
+                    <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                      <span>Paint Radius</span>
+                      <span className="font-mono">{terrainBrush.radius.toFixed(1)}m</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.6}
+                      max={12}
+                      step={0.2}
+                      value={terrainBrush.radius}
+                      onChange={(e) =>
+                        onTerrainBrushChange({ ...terrainBrush, radius: parseFloat(e.target.value) })
+                      }
+                      className="atelier-range w-full"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {activeToolMode === 'scatter-brush' && (
+                <div className="space-y-2 rounded-lg border border-[#EAE5DC] bg-[#FAF9F6] p-2.5">
+                  <div className="grid grid-cols-5 gap-1">
+                    {SCATTER_PRESETS.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => onScatterBrushChange({ ...scatterBrush, preset: p.id })}
+                        className={`rounded-md border py-1 text-[10px] font-medium transition-colors ${
+                          scatterBrush.preset === p.id
+                            ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                            : 'border-[#E2DDD4] bg-white text-[#5A564F]'
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                        <span>Brush Radius</span>
+                        <span className="font-mono">{scatterBrush.radius.toFixed(1)}m</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={8}
+                        step={0.25}
+                        value={scatterBrush.radius}
+                        onChange={(e) =>
+                          onScatterBrushChange({ ...scatterBrush, radius: parseFloat(e.target.value) })
+                        }
+                        className="atelier-range w-full"
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                        <span>Density</span>
+                        <span className="font-mono">{scatterBrush.density}×</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={5}
+                        step={1}
+                        value={scatterBrush.density}
+                        onChange={(e) =>
+                          onScatterBrushChange({ ...scatterBrush, density: parseInt(e.target.value, 10) })
+                        }
+                        className="atelier-range w-full"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-[#6E6960]">
+                    Paint directly on terrain or surfaces to scatter foliage & rocks (Ctrl+Z undoes strokes).
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Gravity, Physics & Temporary Play Mode */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  Physics, Gravity & Play
+                </span>
+                <button
+                  type="button"
+                  onClick={onResetPhysics}
+                  className="text-[10.5px] font-medium text-[#2D5A4C] hover:underline"
+                >
+                  Reset Sim
+                </button>
+              </div>
+
               <div className="grid grid-cols-2 gap-1.5">
+                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#E5E1DA] bg-white px-2.5 py-1.5 text-[11px]">
+                  <span className="text-[#1C1B19]">Gravity</span>
+                  <input
+                    type="checkbox"
+                    checked={physicsConfig.gravityEnabled}
+                    onChange={(e) =>
+                      onPhysicsConfigChange({ ...physicsConfig, gravityEnabled: e.target.checked })
+                    }
+                    className="h-3.5 w-3.5 accent-[#2D5A4C]"
+                  />
+                </label>
+                <label className="flex cursor-pointer items-center justify-between rounded-lg border border-[#E5E1DA] bg-white px-2.5 py-1.5 text-[11px]">
+                  <span className="text-[#1C1B19]">Live Sim</span>
+                  <input
+                    type="checkbox"
+                    checked={physicsConfig.liveSimulation}
+                    onChange={(e) =>
+                      onPhysicsConfigChange({ ...physicsConfig, liveSimulation: e.target.checked })
+                    }
+                    className="h-3.5 w-3.5 accent-[#2D5A4C]"
+                  />
+                </label>
+              </div>
+
+              <div>
+                <div className="mb-0.5 flex justify-between text-[10px] text-[#5A564F]">
+                  <span>Gravity Strength</span>
+                  <span className="font-mono">-{physicsConfig.gravityStrength.toFixed(1)} m/s²</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={24}
+                  step={0.5}
+                  value={physicsConfig.gravityStrength}
+                  onChange={(e) =>
+                    onPhysicsConfigChange({
+                      ...physicsConfig,
+                      gravityStrength: parseFloat(e.target.value),
+                    })
+                  }
+                  className="atelier-range w-full"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={onTogglePlayMode}
+                className={`flex w-full items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11.5px] font-medium transition-colors ${
+                  playModeActive
+                    ? 'bg-[#9E3134] text-white hover:bg-[#822528]'
+                    : 'bg-[#2D5A4C] text-white hover:bg-[#22453A]'
+                }`}
+              >
+                <Play className="h-3.5 w-3.5" />
+                {playModeActive ? 'Stop Play Mode & Restore Scene' : 'Enter Temporary Play Mode'}
+              </button>
+            </div>
+
+            {/* World Atmosphere, Sun, Fog & Camera Speed/FOV */}
+            <div className="rounded-xl border border-[#ECE8E1] bg-white p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  World Sky, Sun & Camera
+                </span>
+                <label className="flex cursor-pointer items-center gap-1.5 text-[10.5px] text-[#5A564F]">
+                  <span>Shadows</span>
+                  <input
+                    type="checkbox"
+                    checked={shadowsEnabled}
+                    onChange={onToggleShadows}
+                    className="h-3.5 w-3.5 accent-[#2D5A4C]"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
                 {WORLD_ENV_OPTIONS.map((env) => (
                   <button
                     key={env.id}
                     type="button"
                     onClick={() => onWorldEnvChange(env.id, worldFogDensity)}
-                    className={`rounded-lg border py-1.5 text-[11.5px] font-medium transition-colors ${
+                    className={`rounded-lg border py-1.5 text-[11px] font-medium transition-colors ${
                       worldEnvPreset === env.id
                         ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
                         : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#5A564F] hover:text-[#1C1B19]'
@@ -1410,20 +1875,80 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                   </button>
                 ))}
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="mb-0.5 flex justify-between text-[10.5px]">
+                    <span className="text-[#5A564F]">Sun Pitch</span>
+                    <span className="font-mono text-[#1C1B19]">{Math.round(sunElevationDeg)}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={6}
+                    max={85}
+                    step={1}
+                    value={sunElevationDeg}
+                    onChange={(e) => onSunElevationChange(parseInt(e.target.value, 10))}
+                    className="atelier-range w-full"
+                  />
+                </div>
+                <div>
+                  <div className="mb-0.5 flex justify-between text-[10.5px]">
+                    <span className="text-[#5A564F]">Distance Fog</span>
+                    <span className="font-mono text-[#1C1B19]">{(worldFogDensity * 1000).toFixed(0)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.09}
+                    step={0.002}
+                    value={worldFogDensity}
+                    onChange={(e) => onWorldEnvChange(worldEnvPreset, parseFloat(e.target.value))}
+                    className="atelier-range w-full"
+                  />
+                </div>
+                <div>
+                  <div className="mb-0.5 flex justify-between text-[10.5px]">
+                    <span className="text-[#5A564F]">Height Fog</span>
+                    <span className="font-mono text-[#1C1B19]">{worldFogHeight.toFixed(0)}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    step={2}
+                    value={worldFogHeight}
+                    onChange={(e) => onWorldFogHeightChange(parseFloat(e.target.value))}
+                    className="atelier-range w-full"
+                  />
+                </div>
+                <div>
+                  <div className="mb-0.5 flex justify-between text-[10.5px]">
+                    <span className="text-[#5A564F]">Camera FOV</span>
+                    <span className="font-mono text-[#1C1B19]">{Math.round(cameraFov)}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={20}
+                    max={95}
+                    step={1}
+                    value={cameraFov}
+                    onChange={(e) => onCameraFovChange(parseInt(e.target.value, 10))}
+                    className="atelier-range w-full"
+                  />
+                </div>
+              </div>
               <div>
-                <div className="mb-1 flex justify-between text-[11px]">
-                  <span className="text-[#5A564F]">Atmospheric Fog</span>
-                  <span className="font-mono text-[#1C1B19] tabular-nums">
-                    {(worldFogDensity * 1000).toFixed(0)}
-                  </span>
+                <div className="mb-0.5 flex justify-between text-[10.5px]">
+                  <span className="text-[#5A564F]">Camera Navigation Speed</span>
+                  <span className="font-mono text-[#1C1B19]">{cameraSpeed.toFixed(1)}×</span>
                 </div>
                 <input
                   type="range"
-                  min={0}
-                  max={0.09}
-                  step={0.004}
-                  value={worldFogDensity}
-                  onChange={(e) => onWorldEnvChange(worldEnvPreset, parseFloat(e.target.value))}
+                  min={0.2}
+                  max={3.0}
+                  step={0.1}
+                  value={cameraSpeed}
+                  onChange={(e) => onCameraSpeedChange(parseFloat(e.target.value))}
                   className="atelier-range w-full"
                 />
               </div>
@@ -1636,11 +2161,21 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5">
-              <div className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
-                Material Slots ({materials.length})
+            <div className="rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold tracking-[0.04em] text-[#5A564F] uppercase">
+                  PBR Material Slots ({materials.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={onSaveTexturesToRepo}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#CFE2DA] bg-[#F2F8F5] px-2 py-0.5 text-[10.5px] font-medium text-[#1D4438] hover:bg-[#E4F0EB]"
+                >
+                  <CloudUpload className="h-3 w-3" />
+                  Save Textures
+                </button>
               </div>
-              <div className="mt-2.5 space-y-2">
+              <div className="space-y-2">
                 {materials.length === 0 ? (
                   <p className="text-[11.5px] text-[#847E75]">No mesh materials on stage.</p>
                 ) : (
@@ -1648,12 +2183,21 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                     const activeMaps = Object.entries(mat.maps)
                       .filter(([, present]) => present)
                       .map(([k]) => k);
+                    const isEditing = editingMaterialUuid === mat.uuid;
                     return (
                       <div
                         key={mat.uuid}
-                        className="rounded-lg border border-[#EAE5DC] bg-white px-3 py-2"
+                        className={`rounded-lg border px-3 py-2 transition-colors ${
+                          isEditing
+                            ? 'border-[#2D5A4C] bg-white'
+                            : 'border-[#EAE5DC] bg-white hover:border-[#CFC9BE]'
+                        }`}
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingMaterialUuid(isEditing ? null : mat.uuid)}
+                          className="flex w-full items-center justify-between gap-2 text-left"
+                        >
                           <div className="flex min-w-0 items-center gap-2">
                             <span
                               className="h-3 w-3 shrink-0 rounded-full border border-[#D3CEC4]"
@@ -1666,12 +2210,200 @@ export const InspectorSheet: React.FC<InspectorSheetProps> = ({
                           <span className="font-mono text-[10px] text-[#847E75] tabular-nums">
                             M {mat.metalness.toFixed(1)} · R {mat.roughness.toFixed(1)}
                           </span>
-                        </div>
+                        </button>
                         <div className="mt-1 text-[10.5px] text-[#847E75]">
                           {activeMaps.length > 0
                             ? `Maps: ${activeMaps.join(', ')}`
-                            : 'Procedural BSDF'}
+                            : 'Procedural BSDF · Click to edit'}
                         </div>
+
+                        {isEditing && (
+                          <div className="mt-2.5 space-y-2 border-t border-[#EFECE6] pt-2.5">
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="flex items-center justify-between text-[10.5px] text-[#5A564F]">
+                                <span>Albedo</span>
+                                <input
+                                  type="color"
+                                  value={mat.colorHex}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: e.target.value,
+                                      metalness: mat.metalness,
+                                      roughness: mat.roughness,
+                                      emissiveHex: mat.emissiveHex || '#000000',
+                                      emissiveIntensity: mat.emissiveIntensity || 0,
+                                      bumpScale: mat.bumpScale || 0,
+                                    })
+                                  }
+                                  className="h-5 w-7 cursor-pointer rounded border border-[#D8D3CA]"
+                                />
+                              </label>
+                              <label className="flex items-center justify-between text-[10.5px] text-[#5A564F]">
+                                <span>Emissive</span>
+                                <input
+                                  type="color"
+                                  value={mat.emissiveHex || '#000000'}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: mat.colorHex,
+                                      metalness: mat.metalness,
+                                      roughness: mat.roughness,
+                                      emissiveHex: e.target.value,
+                                      emissiveIntensity: Math.max(0.4, mat.emissiveIntensity || 0),
+                                      bumpScale: mat.bumpScale || 0,
+                                    })
+                                  }
+                                  className="h-5 w-7 cursor-pointer rounded border border-[#D8D3CA]"
+                                />
+                              </label>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="flex justify-between text-[10px] text-[#5A564F]">
+                                  <span>Metallic</span>
+                                  <span className="font-mono">{mat.metalness.toFixed(2)}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={1}
+                                  step={0.02}
+                                  value={mat.metalness}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: mat.colorHex,
+                                      metalness: parseFloat(e.target.value),
+                                      roughness: mat.roughness,
+                                      emissiveHex: mat.emissiveHex || '#000000',
+                                      emissiveIntensity: mat.emissiveIntensity || 0,
+                                      bumpScale: mat.bumpScale || 0,
+                                    })
+                                  }
+                                  className="atelier-range w-full"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex justify-between text-[10px] text-[#5A564F]">
+                                  <span>Roughness</span>
+                                  <span className="font-mono">{mat.roughness.toFixed(2)}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={0.04}
+                                  max={1}
+                                  step={0.02}
+                                  value={mat.roughness}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: mat.colorHex,
+                                      metalness: mat.metalness,
+                                      roughness: parseFloat(e.target.value),
+                                      emissiveHex: mat.emissiveHex || '#000000',
+                                      emissiveIntensity: mat.emissiveIntensity || 0,
+                                      bumpScale: mat.bumpScale || 0,
+                                    })
+                                  }
+                                  className="atelier-range w-full"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <div className="flex justify-between text-[10px] text-[#5A564F]">
+                                  <span>Glow</span>
+                                  <span className="font-mono">
+                                    {(mat.emissiveIntensity || 0).toFixed(2)}
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={2.5}
+                                  step={0.05}
+                                  value={mat.emissiveIntensity || 0}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: mat.colorHex,
+                                      metalness: mat.metalness,
+                                      roughness: mat.roughness,
+                                      emissiveHex: mat.emissiveHex || '#000000',
+                                      emissiveIntensity: parseFloat(e.target.value),
+                                      bumpScale: mat.bumpScale || 0,
+                                    })
+                                  }
+                                  className="atelier-range w-full"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex justify-between text-[10px] text-[#5A564F]">
+                                  <span>Bump</span>
+                                  <span className="font-mono">{(mat.bumpScale || 0).toFixed(2)}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={0.2}
+                                  step={0.01}
+                                  value={mat.bumpScale || 0}
+                                  onChange={(e) =>
+                                    onEditMaterial({
+                                      materialUuid: mat.uuid,
+                                      colorHex: mat.colorHex,
+                                      metalness: mat.metalness,
+                                      roughness: mat.roughness,
+                                      emissiveHex: mat.emissiveHex || '#000000',
+                                      emissiveIntensity: mat.emissiveIntensity || 0,
+                                      bumpScale: parseFloat(e.target.value),
+                                    })
+                                  }
+                                  className="atelier-range w-full"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="mb-1 text-[10px] text-[#6E6960]">Procedural PBR Map</div>
+                              <div className="grid grid-cols-5 gap-1">
+                                {(
+                                  [
+                                    { id: 'stone', label: 'Stone' },
+                                    { id: 'wood', label: 'Wood' },
+                                    { id: 'runic-bronze', label: 'Bronze' },
+                                    { id: 'moss-grass', label: 'Moss' },
+                                    { id: 'none', label: 'Clear' },
+                                  ] as const
+                                ).map((p) => (
+                                  <button
+                                    key={p.id}
+                                    type="button"
+                                    onClick={() =>
+                                      onEditMaterial({
+                                        materialUuid: mat.uuid,
+                                        colorHex: mat.colorHex,
+                                        metalness: mat.metalness,
+                                        roughness: mat.roughness,
+                                        emissiveHex: mat.emissiveHex || '#000000',
+                                        emissiveIntensity: mat.emissiveIntensity || 0,
+                                        bumpScale: mat.bumpScale || 0.04,
+                                        proceduralPattern: p.id,
+                                      })
+                                    }
+                                    className="rounded border border-[#E2DDD4] bg-[#FAF9F6] py-0.5 text-[10px] font-medium text-[#1C1B19] hover:border-[#2D5A4C] hover:bg-[#EBF2EF]"
+                                  >
+                                    {p.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })

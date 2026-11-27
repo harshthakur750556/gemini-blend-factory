@@ -1,0 +1,10 @@
+{
+  "slug": "expressive-robot",
+  "name": "Expressive Robot",
+  "group": "Characters",
+  "source": "threejs-official-sample",
+  "license": "CC0 1.0",
+  "modelFile": "/models/robot-expressive.glb",
+  "previewUrl": "/models/previews/robot-expressive.png",
+  "description": "Expressive rigged robot character with skeletal locomotion and morph-target facial expressions."
+}

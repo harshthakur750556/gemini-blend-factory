@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { SceneLightKind, WorldPrimitiveKind } from '../types';
+import type { ScatterBrushPreset, SceneLightKind, WorldPrimitiveKind } from '../types';
+import { createOpenWorldTerrainMesh } from './terrainEngine';
 
 /**
  * Converts a Blender 36x24mm full-frame focal length (mm) to Three.js vertical FOV (degrees).
@@ -333,29 +334,11 @@ export function createWorldPrimitive(
       return group;
     }
     case 'terrain': {
-      const geo = new THREE.PlaneGeometry(7.5, 7.5, 36, 36);
-      geo.rotateX(-Math.PI / 2);
-      const pos = geo.getAttribute('position');
-      for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i);
-        const z = pos.getZ(i);
-        const dist = Math.hypot(x, z);
-        const ridge =
-          Math.sin(x * 0.72) * Math.cos(z * 0.68) * 0.38 +
-          Math.sin((x + z) * 1.15) * 0.14;
-        const flatCenter = THREE.MathUtils.smoothstep(dist, 0.9, 2.5);
-        pos.setY(i, Math.max(0, (ridge + 0.32) * flatCenter));
-      }
-      geo.computeVertexNormals();
-      const mat = new THREE.MeshStandardMaterial({
-        name: `Sculpted_Terrain_${indexSuffix}`,
-        color: '#8D957E',
-        roughness: 0.92,
-        metalness: 0.0,
+      return createOpenWorldTerrainMesh(indexSuffix, {
+        size: 32,
+        segments: 64,
+        includeBasin: true,
       });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.name = `Terrain_Patch_${indexSuffix}`;
-      return mesh;
     }
     case 'water': {
       const geo = new THREE.PlaneGeometry(4.5, 4.5, 16, 16);
@@ -657,4 +640,200 @@ export async function extractTexturesFromObject3D(
 
   await Promise.all(tasks);
   return outputs;
+}
+
+/**
+ * Generates procedural scatter props for interactive brush-based open-world painting.
+ */
+export function createScatterBrushProp(
+  preset: ScatterBrushPreset,
+  indexSuffix: number,
+  selectedSource?: THREE.Object3D | null
+): THREE.Object3D {
+  if (preset === 'selected' && selectedSource && !selectedSource.userData?.isEditorHelper) {
+    const clone = selectedSource.clone(true);
+    clone.name = `${selectedSource.name || 'Prop'}_Brush_${indexSuffix}`;
+    return clone;
+  }
+
+  switch (preset) {
+    case 'pine-tree': {
+      const g = new THREE.Group();
+      g.name = `Scatter_Pine_${indexSuffix}`;
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.13, 0.55, 7),
+        new THREE.MeshStandardMaterial({ color: '#5D4433', roughness: 0.92 })
+      );
+      trunk.position.y = 0.275;
+      trunk.castShadow = true;
+      const foliageMat = new THREE.MeshStandardMaterial({ color: '#2F614B', roughness: 0.86 });
+      const c1 = new THREE.Mesh(new THREE.ConeGeometry(0.52, 0.78, 7), foliageMat);
+      c1.position.y = 0.78;
+      c1.castShadow = true;
+      const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.38, 0.65, 7), foliageMat);
+      c2.position.y = 1.2;
+      c2.castShadow = true;
+      const c3 = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.5, 7), foliageMat);
+      c3.position.y = 1.54;
+      c3.castShadow = true;
+      g.add(trunk, c1, c2, c3);
+      return g;
+    }
+    case 'boulder': {
+      const mesh = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.38, 1),
+        new THREE.MeshStandardMaterial({ color: '#6E747B', roughness: 0.88, metalness: 0.05 })
+      );
+      mesh.name = `Scatter_Boulder_${indexSuffix}`;
+      mesh.scale.set(1.2, 0.72, 1.0);
+      mesh.position.y = 0.2;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+    case 'crystal': {
+      const g = new THREE.Group();
+      g.name = `Scatter_Crystal_${indexSuffix}`;
+      const mat = new THREE.MeshStandardMaterial({
+        color: '#4FD6FF',
+        emissive: '#1687C4',
+        emissiveIntensity: 0.75,
+        roughness: 0.15,
+        metalness: 0.25,
+      });
+      const main = new THREE.Mesh(new THREE.OctahedronGeometry(0.26, 0), mat);
+      main.scale.set(0.65, 1.7, 0.65);
+      main.position.y = 0.35;
+      const side = new THREE.Mesh(new THREE.OctahedronGeometry(0.18, 0), mat);
+      side.scale.set(0.65, 1.4, 0.65);
+      side.position.set(0.18, 0.22, 0.08);
+      side.rotation.z = -0.35;
+      g.add(main, side);
+      return g;
+    }
+    case 'grass-tuft': {
+      const g = new THREE.Group();
+      g.name = `Scatter_Grass_${indexSuffix}`;
+      const mat = new THREE.MeshStandardMaterial({
+        color: '#5B8A42',
+        roughness: 0.88,
+        side: THREE.DoubleSide,
+      });
+      for (let i = 0; i < 4; i++) {
+        const blade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.42, 4), mat);
+        const a = (i / 4) * Math.PI * 2;
+        blade.position.set(Math.cos(a) * 0.09, 0.18, Math.sin(a) * 0.09);
+        blade.rotation.set(Math.sin(a) * 0.28, a, -Math.cos(a) * 0.28);
+        g.add(blade);
+      }
+      return g;
+    }
+    case 'pillar':
+    default: {
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.22, 0.26, 1.6, 10),
+        new THREE.MeshStandardMaterial({ color: '#9D9587', roughness: 0.78, metalness: 0.05 })
+      );
+      mesh.name = `Scatter_Pillar_${indexSuffix}`;
+      mesh.position.y = 0.8;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+  }
+}
+
+/**
+ * Generates procedural PBR albedo + bump CanvasTextures for the in-app Material Editor.
+ */
+export function createProceduralMaterialMaps(
+  pattern: 'stone' | 'wood' | 'runic-bronze' | 'moss-grass',
+  baseHex: string,
+  size = 256
+): { map: THREE.CanvasTexture; bump: THREE.CanvasTexture } | null {
+  if (typeof document === 'undefined') return null;
+  const cMap = document.createElement('canvas');
+  cMap.width = size;
+  cMap.height = size;
+  const ctx = cMap.getContext('2d');
+
+  const cBump = document.createElement('canvas');
+  cBump.width = size;
+  cBump.height = size;
+  const bCtx = cBump.getContext('2d');
+  if (!ctx || !bCtx) return null;
+
+  ctx.fillStyle = baseHex || '#9C968B';
+  ctx.fillRect(0, 0, size, size);
+  bCtx.fillStyle = '#808080';
+  bCtx.fillRect(0, 0, size, size);
+
+  let s = 7331;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+
+  if (pattern === 'wood') {
+    for (let y = 0; y < size; y += 3) {
+      const alpha = 0.08 + rand() * 0.16;
+      ctx.fillStyle = rand() > 0.5 ? `rgba(45,28,16,${alpha})` : `rgba(210,175,130,${alpha * 0.7})`;
+      ctx.fillRect(0, y, size, 2 + rand() * 3);
+      const bv = Math.round(105 + Math.sin(y * 0.25) * 35 + rand() * 20);
+      bCtx.fillStyle = `rgb(${bv},${bv},${bv})`;
+      bCtx.fillRect(0, y, size, 3);
+    }
+  } else if (pattern === 'runic-bronze') {
+    ctx.strokeStyle = 'rgba(130, 225, 255, 0.55)';
+    ctx.lineWidth = 2;
+    bCtx.strokeStyle = '#E5E5E5';
+    bCtx.lineWidth = 3;
+    for (let y = 24; y < size; y += 48) {
+      ctx.strokeRect(8, y, size - 16, 30);
+      bCtx.strokeRect(8, y, size - 16, 30);
+      for (let x = 20; x < size - 20; x += 28) {
+        ctx.beginPath();
+        ctx.arc(x, y + 15, 7, 0, Math.PI * 2);
+        ctx.stroke();
+        bCtx.beginPath();
+        bCtx.arc(x, y + 15, 7, 0, Math.PI * 2);
+        bCtx.stroke();
+      }
+    }
+  } else if (pattern === 'moss-grass') {
+    for (let i = 0; i < 1600; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      ctx.fillStyle = rand() > 0.45 ? 'rgba(62,112,56,0.45)' : 'rgba(148,186,88,0.38)';
+      ctx.fillRect(x, y, 2 + rand() * 3, 2 + rand() * 4);
+      const bv = Math.round(90 + rand() * 110);
+      bCtx.fillStyle = `rgb(${bv},${bv},${bv})`;
+      bCtx.fillRect(x, y, 3, 3);
+    }
+  } else {
+    // Stone grain & strata
+    for (let i = 0; i < 1400; i++) {
+      const x = rand() * size;
+      const y = rand() * size;
+      const r = 1.5 + rand() * 4.5;
+      ctx.fillStyle = rand() > 0.5 ? 'rgba(255,255,255,0.09)' : 'rgba(20,20,24,0.14)';
+      ctx.fillRect(x, y, r, r);
+      const bv = Math.round(85 + rand() * 95);
+      bCtx.fillStyle = `rgb(${bv},${bv},${bv})`;
+      bCtx.fillRect(x, y, r, r);
+    }
+  }
+
+  const map = new THREE.CanvasTexture(cMap);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(2, 2);
+
+  const bump = new THREE.CanvasTexture(cBump);
+  bump.wrapS = THREE.RepeatWrapping;
+  bump.wrapT = THREE.RepeatWrapping;
+  bump.repeat.set(2, 2);
+
+  return { map, bump };
 }

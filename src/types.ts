@@ -17,7 +17,13 @@ export type InsideOutSide = 'front' | 'back' | 'double';
 
 export type DragMouseMode = 'orbit' | 'pan' | 'zoom';
 
-export type ViewportToolMode = 'orbit' | 'select' | 'measure';
+export type ViewportToolMode =
+  | 'orbit'
+  | 'select'
+  | 'measure'
+  | 'terrain-sculpt'
+  | 'terrain-paint'
+  | 'scatter-brush';
 
 export type GizmoMode = 'none' | 'translate' | 'rotate' | 'scale';
 
@@ -25,7 +31,85 @@ export type GizmoSpace = 'world' | 'local';
 
 export type StudioLightingPreset = 'studio-4k' | 'architectural' | 'high-contrast' | 'soft-clay';
 
-export type WorldEnvironmentPreset = 'alabaster' | 'courtyard' | 'meadow' | 'desert';
+export type WorldEnvironmentPreset = 'alabaster' | 'courtyard' | 'meadow' | 'desert' | 'celestial';
+
+export type TerrainBrushMode = 'raise' | 'lower' | 'smooth' | 'flatten' | 'noise';
+
+export type TerrainPaintLayer = 'grass' | 'moss' | 'basalt' | 'sand' | 'snow' | 'cave_dirt';
+
+export interface TerrainBrushConfig {
+  mode: TerrainBrushMode;
+  paintLayer: TerrainPaintLayer;
+  radius: number;
+  strength: number;
+  flattenTargetY: number;
+}
+
+export type ScatterBrushPreset = 'pine-tree' | 'boulder' | 'crystal' | 'grass-tuft' | 'pillar' | 'selected';
+
+export interface ScatterBrushConfig {
+  preset: ScatterBrushPreset;
+  radius: number;
+  density: number;
+  minScale: number;
+  maxScale: number;
+  alignToNormal: boolean;
+}
+
+export interface ViewportOverlayFlags {
+  showGrid: boolean;
+  showAxes: boolean;
+  showBounds: boolean;
+  showColliders: boolean;
+}
+
+export interface PhysicsConfig {
+  gravityEnabled: boolean;
+  gravityStrength: number;
+  liveSimulation: boolean;
+}
+
+export interface PlayModeStatus {
+  active: boolean;
+  cameraMode: 'third-person' | 'first-person';
+  playerX: number;
+  playerY: number;
+  playerZ: number;
+  grounded: boolean;
+  sprinting: boolean;
+  flying?: boolean;
+  avatarSource?: 'glb' | 'procedural';
+}
+
+export interface HistoryStateSummary {
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+  undoCount: number;
+  redoCount: number;
+}
+
+export interface ViewportTelemetryHudState {
+  fps: number;
+  objectCount: number;
+  triangleCount: number;
+  vertexCount: number;
+  selectedName: string | null;
+  selectedDimensions: [number, number, number];
+  cursorPosition: [number, number, number];
+}
+
+export interface MaterialEditPayload {
+  materialUuid?: string;
+  colorHex: string;
+  metalness: number;
+  roughness: number;
+  emissiveHex: string;
+  emissiveIntensity: number;
+  bumpScale: number;
+  proceduralPattern?: 'none' | 'stone' | 'wood' | 'runic-bronze' | 'moss-grass';
+}
 
 export type WorldPrimitiveKind =
   | 'cube'
@@ -80,6 +164,9 @@ export type InspectorTabId = 'outliner' | 'world' | 'material' | 'diagnostics' |
 export type WorkbenchTabId = 'harness' | 'vision' | 'script' | 'workspace';
 
 export type ModelGroupName =
+  | 'Female_Characters'
+  | 'Male_Characters'
+  | 'Characters'
   | 'Sample'
   | 'Architecture'
   | 'Props'
@@ -173,6 +260,7 @@ export interface AvailableModelItem {
   group: ModelGroupName;
   sizeBytes?: number;
   url?: string;
+  previewUrl?: string;
   driveFileId?: string;
   specimenKind?: 'stone-lantern';
   htmlUrl?: string;
@@ -187,6 +275,7 @@ export interface AvailableModelItem {
 
 export interface OutlinerNode {
   uuid: string;
+  parentUuid?: string | null;
   name: string;
   type: 'Mesh' | 'SkinnedMesh' | 'Bone' | 'Group' | 'Light' | 'Camera';
   lightKind?: SceneLightKind;
@@ -211,8 +300,11 @@ export interface MaterialChannelInfo {
   name: string;
   type: string;
   colorHex: string;
+  emissiveHex?: string;
+  emissiveIntensity?: number;
   metalness: number;
   roughness: number;
+  bumpScale?: number;
   maps: {
     albedo: boolean;
     normal: boolean;

@@ -1,0 +1,10 @@
+{
+  "slug": "tactical-soldier",
+  "name": "Tactical Soldier",
+  "group": "Male_Characters",
+  "source": "threejs-official-sample",
+  "license": "MIT",
+  "modelFile": "/models/player-character.glb",
+  "previewUrl": "/models/previews/player-character.png",
+  "description": "Rigged animated male tactical character with Idle, Walk, and Run skeletal animation clips (also powers Play Mode)."
+}

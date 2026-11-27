@@ -1,0 +1,10 @@
+{
+  "slug": "cesium-explorer",
+  "name": "Cesium Explorer",
+  "group": "Male_Characters",
+  "source": "khronos-gltf-sample-assets",
+  "license": "CC-BY 4.0",
+  "modelFile": "/models/cesium-man.glb",
+  "previewUrl": "/models/previews/cesium-man.png",
+  "description": "Rigged walking male explorer character from the official Khronos Group glTF Sample Assets library."
+}

@@ -42,6 +42,7 @@ import {
   RotateCcw,
   RotateCw,
   Ruler,
+  Scaling,
   Scissors,
   Shield,
   SlidersHorizontal,
@@ -62,6 +63,8 @@ import {
 import {
   buildArrayModifierClones,
   buildScatterInstances,
+  createProceduralMaterialMaps,
+  createScatterBrushProp,
   createWorldPrimitive,
   focalLengthMmToFovDeg,
   fovDegToFocalLengthMm,
@@ -70,6 +73,40 @@ import {
   rebuildSpotLightConeHelper,
 } from '../utils/worldPrimitives';
 import { parseDxf3dFacesToGeometry, parseOffToGeometry } from '../utils/modelConverter';
+import {
+  clearHistoryStack,
+  createHistoryStack,
+  getHistorySummary,
+  pushHistoryCommand,
+  stepRedo,
+  stepUndo,
+  type HistoryStack,
+} from '../utils/undoHistory';
+import {
+  applyTerrainPaintBrush,
+  applyTerrainSculptBrush,
+  captureTerrainSnapshot,
+  restoreTerrainSnapshot,
+  sampleTerrainHeightAt,
+  type TerrainGeometrySnapshot,
+} from '../utils/terrainEngine';
+import {
+  animatePlayerAvatar,
+  captureSceneTransformSnapshot,
+  collectWalkableMeshes,
+  collectWorldColliders,
+  createPlayerAvatarMesh,
+  createPlayerState,
+  findSafePlayerSpawn,
+  restoreSceneTransformSnapshot,
+  stepPlayerController,
+  stepRigidBodies,
+  type AabbCollider,
+  type PlayerControllerState,
+  type RigidBodyState,
+  type TransformSnapshotItem,
+} from '../utils/physicsEngine';
+import { ViewportHud } from './ViewportHud';
 import type {
   AnimationClipSummary,
   BoneControlInfo,
@@ -79,9 +116,14 @@ import type {
   ExecutionMode,
   GizmoMode,
   GizmoSpace,
+  HistoryStateSummary,
   InsideOutSide,
   MaterialChannelInfo,
+  MaterialEditPayload,
   OutlinerNode,
+  PhysicsConfig,
+  PlayModeStatus,
+  ScatterBrushConfig,
   SceneLightKind,
   SceneTelemetry,
   SectionCutConfig,
@@ -90,8 +132,11 @@ import type {
   ShadingPass,
   StudioLightingPreset,
   SurfaceParams,
+  TerrainBrushConfig,
   TopologyDiagnostics,
   TransformInfo,
+  ViewportOverlayFlags,
+  ViewportTelemetryHudState,
   ViewportToolMode,
   WorldEnvironmentPreset,
   WorldPrimitiveKind,
@@ -104,6 +149,7 @@ export interface StudioViewportHandle {
   mountParsedGroup: (group: THREE.Group, displayName: string) => void;
   clearToPointCloud: () => void;
   setCameraPreset: (preset: BlenderCameraPreset) => void;
+  focusSelected: () => void;
   toggleOrtho: () => void;
   zoomBy: (factor: number) => void;
   resetView: () => void;
@@ -116,10 +162,27 @@ export interface StudioViewportHandle {
   toggleNodeLock: (uuid: string) => void;
   toggleSoloNode: (uuid: string) => void;
   showAllNodes: () => void;
+  groupSelectedNode: () => void;
+  unparentNode: (uuid: string) => void;
+  reparentNode: (childUuid: string, newParentUuid: string) => void;
   updateTransform: (
     axis: 'posX' | 'posY' | 'posZ' | 'rotX' | 'rotY' | 'rotZ' | 'scaleX' | 'scaleY' | 'scaleZ',
     value: number
   ) => void;
+  // Undo / Redo
+  undo: () => void;
+  redo: () => void;
+  // Play Mode & Physics
+  startPlayMode: () => void;
+  stopPlayMode: () => void;
+  togglePlayMode: () => void;
+  togglePlayCameraMode: () => void;
+  setPlayInputKey: (key: string, pressed: boolean) => void;
+  resetPhysicsState: () => void;
+  // Active viewport tool (select, measure, terrain-sculpt, terrain-paint, scatter-brush)
+  setViewportToolMode: (mode: ViewportToolMode) => void;
+  // Direct PBR Material Editing
+  editMaterial: (payload: MaterialEditPayload) => void;
   // Blender Light & Scene Camera Properties
   updateLightProperties: (
     uuid: string,
@@ -141,7 +204,7 @@ export interface StudioViewportHandle {
   toggleSelectedFlatShading: () => void;
   applyArrayModifier: (count: number, offset: [number, number, number]) => void;
   applyScatterModifier: (count: number, radius: number) => void;
-  updateWorldEnvironment: (preset: WorldEnvironmentPreset, fogDensity: number) => void;
+  updateWorldEnvironment: (preset: WorldEnvironmentPreset, fogDensity: number, fogHeight?: number) => void;
   // Diagnostics & Rig
   recalculateNormals: () => void;
   purgeDegenerates: () => void;
@@ -159,6 +222,10 @@ interface StudioViewportProps {
   onToggleQuadView: () => void;
   showGrid: boolean;
   onToggleGrid: () => void;
+  overlays: ViewportOverlayFlags;
+  onToggleOverlay: (key: keyof ViewportOverlayFlags) => void;
+  cameraFov: number;
+  cameraSpeed: number;
   autoSpin: boolean;
   onToggleAutoSpin: () => void;
   exploded: boolean;
@@ -167,6 +234,8 @@ interface StudioViewportProps {
   onLightingPresetChange: (preset: StudioLightingPreset) => void;
   lightAngleDeg: number;
   onLightAngleChange: (deg: number) => void;
+  sunElevationDeg: number;
+  shadowsEnabled: boolean;
   wireframeOpacity: number;
   onWireframeOpacityChange: (val: number) => void;
   insideOutSide: InsideOutSide;
@@ -179,8 +248,18 @@ interface StudioViewportProps {
   gizmoSpace: GizmoSpace;
   snapGrid: number;
   snapRotateDeg: number;
+  snapScale: number;
   worldEnvPreset: WorldEnvironmentPreset;
   worldFogDensity: number;
+  worldFogHeight: number;
+  terrainBrush: TerrainBrushConfig;
+  scatterBrush: ScatterBrushConfig;
+  physicsConfig: PhysicsConfig;
+  onCycleGravityMode: () => void;
+  activeToolMode?: ViewportToolMode;
+  onToolModeChange?: (mode: ViewportToolMode) => void;
+  onHistoryChange?: (summary: HistoryStateSummary) => void;
+  onPlayModeChange?: (status: PlayModeStatus) => void;
   executionMode: ExecutionMode;
   fsSupported: boolean;
   inspectorOpen: boolean;
@@ -226,9 +305,26 @@ const LIGHTING_OPTIONS: Array<{ id: StudioLightingPreset; label: string }> = [
 
 const WORLD_ENV_BG: Record<WorldEnvironmentPreset, string> = {
   alabaster: '#ECEAE4',
-  courtyard: '#E5E8EC',
-  meadow: '#E3EBE5',
-  desert: '#F1E6D6',
+  courtyard: '#DFE7F0',
+  meadow: '#DCEAE2',
+  desert: '#F1E2CC',
+  celestial: '#9FD8F7',
+};
+
+const WORLD_SKY_GRADIENT: Record<
+  WorldEnvironmentPreset,
+  { zenith: string; horizon: string; nadir: string; warmHorizon?: string }
+> = {
+  alabaster: { zenith: '#ECEAE4', horizon: '#ECEAE4', nadir: '#E2DFD7' },
+  courtyard: { zenith: '#B8D0E8', horizon: '#E7EEF4', nadir: '#D4DBE2' },
+  meadow: { zenith: '#9ECAE4', horizon: '#E3F0E9', nadir: '#CBD7CD' },
+  desert: { zenith: '#B5CBE0', horizon: '#F4E3C9', nadir: '#DEC8AB' },
+  celestial: {
+    zenith: '#2186DB',
+    horizon: '#8CD9FC',
+    nadir: '#7AC2EA',
+    warmHorizon: '#FFE3C6',
+  },
 };
 
 function isInsideEditorElement(obj: THREE.Object3D): boolean {
@@ -398,15 +494,17 @@ function createContactShadowTexture(): THREE.CanvasTexture {
 }
 
 function createInfiniteFloorGrid(): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(80, 80, 1, 1);
+  // Large open-world grid plane (600x600m) rendered DoubleSide so Y < 0 underside navigation works seamlessly
+  const geo = new THREE.PlaneGeometry(600, 600, 1, 1);
   geo.rotateX(-Math.PI / 2);
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
+    side: THREE.DoubleSide,
     uniforms: {
       uMinorColor: { value: new THREE.Color('#CEC8BE') },
       uMajorColor: { value: new THREE.Color('#ABA498') },
-      uFadeDist: { value: 24.0 },
+      uFadeDist: { value: 180.0 },
     },
     vertexShader: `
       varying vec3 vWorldPos;
@@ -424,16 +522,16 @@ function createInfiniteFloorGrid(): THREE.Mesh {
 
       float gridLine(vec2 coord, float scale) {
         vec2 p = coord / scale;
-        vec2 grid = abs(fract(p - 0.5) - 0.5) / fwidth(p);
+        vec2 grid = abs(fract(p - 0.5) - 0.5) / max(fwidth(p), vec2(0.0001));
         float line = min(grid.x, grid.y);
         return 1.0 - min(line, 1.0);
       }
 
       void main() {
         float dist = length(vWorldPos.xz);
-        float fade = smoothstep(uFadeDist, 1.5, dist);
-        float minor = gridLine(vWorldPos.xz, 0.5) * 0.34;
-        float major = gridLine(vWorldPos.xz, 2.0) * 0.65;
+        float fade = smoothstep(uFadeDist, 4.0, dist);
+        float minor = gridLine(vWorldPos.xz, 1.0) * 0.28;
+        float major = gridLine(vWorldPos.xz, 5.0) * 0.58;
         vec3 col = mix(uMinorColor, uMajorColor, step(minor, major));
         float alpha = max(minor, major) * fade;
         if (alpha < 0.01) discard;
@@ -445,7 +543,73 @@ function createInfiniteFloorGrid(): THREE.Mesh {
   mesh.name = 'Atelier_Infinite_Grid';
   mesh.position.y = -0.002;
   mesh.renderOrder = -1;
+  mesh.userData.isEditorHelper = true;
   return mesh;
+}
+
+function createProceduralSkyDome(): THREE.Mesh {
+  const geo = new THREE.SphereGeometry(750, 32, 20);
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      uZenith: { value: new THREE.Color('#2186DB') },
+      uHorizon: { value: new THREE.Color('#8CD9FC') },
+      uNadir: { value: new THREE.Color('#7AC2EA') },
+      uWarmHorizon: { value: new THREE.Color('#FFE3C6') },
+      uWarmFactor: { value: 1.0 },
+      uSunDir: { value: new THREE.Vector3(-0.62, 0.22, -0.75).normalize() },
+    },
+    vertexShader: `
+      varying vec3 vLocalDir;
+      void main() {
+        vLocalDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uZenith;
+      uniform vec3 uHorizon;
+      uniform vec3 uNadir;
+      uniform vec3 uWarmHorizon;
+      uniform float uWarmFactor;
+      uniform vec3 uSunDir;
+      varying vec3 vLocalDir;
+      void main() {
+        vec3 dir = normalize(vLocalDir);
+        float y = dir.y;
+        vec3 col = y >= 0.0
+          ? mix(uHorizon, uZenith, pow(clamp(y, 0.0, 1.0), 0.58))
+          : mix(uHorizon, uNadir, pow(clamp(-y, 0.0, 1.0), 0.65));
+
+        if (uWarmFactor > 0.01) {
+          // Painterly dawn peach-cream horizon ribbon + soft upper-left sun scatter
+          float horizonBand = exp(-pow((y - 0.035) * 6.5, 2.0));
+          float leftWarmth = smoothstep(-0.35, 0.85, -dir.x * 0.72 - dir.z * 0.65);
+          col = mix(col, uWarmHorizon, horizonBand * (0.34 + 0.44 * leftWarmth) * uWarmFactor);
+
+          float sunDot = max(dot(dir, uSunDir), 0.0);
+          float sunHalo = pow(sunDot, 7.0) * 0.36 + pow(sunDot, 36.0) * 0.42;
+          col += vec3(1.0, 0.90, 0.78) * sunHalo * uWarmFactor;
+
+          // Subtle airy cloud-veil streaks in upper sky
+          float streak = sin(dir.x * 9.0 + dir.z * 5.0) * sin(dir.y * 16.0 - dir.x * 4.0);
+          float streakMask = smoothstep(0.04, 0.42, y) * (1.0 - smoothstep(0.42, 0.85, y));
+          col = mix(col, vec3(0.97, 0.98, 1.0), max(0.0, streak) * 0.08 * streakMask * uWarmFactor);
+        }
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+  const dome = new THREE.Mesh(geo, mat);
+  dome.name = 'Procedural_SkyDome';
+  dome.visible = false;
+  dome.renderOrder = -10;
+  dome.userData.isEditorHelper = true;
+  dome.userData.noCollision = true;
+  return dome;
 }
 
 async function loadObject3DFromUrl(
@@ -591,6 +755,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       onToggleQuadView,
       showGrid,
       onToggleGrid,
+      overlays,
+      onToggleOverlay,
+      cameraFov,
+      cameraSpeed,
       autoSpin,
       onToggleAutoSpin,
       exploded,
@@ -599,6 +767,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       onLightingPresetChange,
       lightAngleDeg,
       onLightAngleChange,
+      sunElevationDeg,
+      shadowsEnabled,
       wireframeOpacity,
       onWireframeOpacityChange,
       insideOutSide,
@@ -611,8 +781,18 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       gizmoSpace,
       snapGrid,
       snapRotateDeg,
+      snapScale,
       worldEnvPreset,
       worldFogDensity,
+      worldFogHeight,
+      terrainBrush,
+      scatterBrush,
+      physicsConfig,
+      onCycleGravityMode,
+      activeToolMode,
+      onToolModeChange,
+      onHistoryChange,
+      onPlayModeChange,
       executionMode,
       fsSupported,
       inspectorOpen,
@@ -642,17 +822,46 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const compassCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
     const [dragMode, setDragMode] = useState<DragMouseMode>('orbit');
-    const [toolMode, setToolMode] = useState<ViewportToolMode>('orbit');
+    const [internalToolMode, setInternalToolMode] = useState<ViewportToolMode>('orbit');
+    const toolMode = activeToolMode ?? internalToolMode;
+    const setToolMode = useCallback(
+      (next: ViewportToolMode) => {
+        setInternalToolMode(next);
+        onToolModeChange?.(next);
+      },
+      [onToolModeChange]
+    );
+
     const [isOrtho, setIsOrtho] = useState(false);
     const [controlsHidden, setControlsHidden] = useState(false);
     const [openPopover, setOpenPopover] = useState<'shading' | 'lighting' | 'more' | null>(null);
     const [measuredDistance, setMeasuredDistance] = useState<number | null>(null);
     const [loadingLabel, setLoadingLabel] = useState<string | null>(null);
-    const [captionModelName, setCaptionModelName] = useState<string>('Stone & Cedar Lantern');
-    const [captionSummary, setCaptionSummary] = useState<string>('Architectural Sample');
+    const [captionModelName, setCaptionModelName] = useState<string>('Michelle');
+    const [captionSummary, setCaptionSummary] = useState<string>('Rigged Character');
     const [lookingThroughCam, setLookingThroughCam] = useState(false);
     const [activeSceneCamLabel, setActiveSceneCamLabel] = useState<string>('Scene_Camera');
     const [activeSceneCamFocalMm, setActiveSceneCamFocalMm] = useState<number>(50);
+    const [activePresetLabel, setActivePresetLabel] = useState<string>('Hero 3/4');
+
+    const [hudState, setHudState] = useState<ViewportTelemetryHudState>({
+      fps: 60,
+      objectCount: 0,
+      triangleCount: 0,
+      vertexCount: 0,
+      selectedName: null,
+      selectedDimensions: [0, 0, 0],
+      cursorPosition: [0, 0, 0],
+    });
+    const [playModeStatus, setPlayModeStatus] = useState<PlayModeStatus>({
+      active: false,
+      cameraMode: 'third-person',
+      playerX: 0,
+      playerY: 0,
+      playerZ: 0,
+      grounded: true,
+      sprinting: false,
+    });
 
     // Mutable 3D engine state refs
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -666,6 +875,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const transformCtrlRef = useRef<TransformControls | null>(null);
     const transformHelperRef = useRef<THREE.Object3D | null>(null);
     const gridRef = useRef<THREE.Mesh | null>(null);
+    const axesHelperRef = useRef<THREE.AxesHelper | null>(null);
+    const modelBoundsHelperRef = useRef<THREE.BoxHelper | null>(null);
+    const colliderOverlayGroupRef = useRef<THREE.Group | null>(null);
+    const skyDomeRef = useRef<THREE.Mesh | null>(null);
+    const brushCursorRef = useRef<THREE.LineLoop | null>(null);
     const contactShadowRef = useRef<THREE.Mesh | null>(null);
     const keyLightRef = useRef<THREE.DirectionalLight | null>(null);
     const rimLightRef = useRef<THREE.DirectionalLight | null>(null);
@@ -686,6 +900,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const primitiveCounterRef = useRef<number>(1);
 
     const originalMaterialsRef = useRef<Map<THREE.Mesh, THREE.Material | THREE.Material[]>>(new Map());
+    const tempOverrideMaterialsRef = useRef<Set<THREE.Material>>(new Set());
     const explodeBasePosRef = useRef<Map<THREE.Mesh, THREE.Vector3>>(new Map());
     const explodeDirRef = useRef<Map<THREE.Mesh, THREE.Vector3>>(new Map());
     const explodeFactorRef = useRef<number>(0);
@@ -694,6 +909,80 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const soloNodeUuidRef = useRef<string | null>(null);
     const modelCenterRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0.72, 0));
     const modelRadiusRef = useRef<number>(1.05);
+
+    // Undo / Redo Command History
+    const historyRef = useRef<HistoryStack>(createHistoryStack(60));
+    const tcDragStartRef = useRef<{
+      uuid: string;
+      pos: THREE.Vector3;
+      quat: THREE.Quaternion;
+      scale: THREE.Vector3;
+    } | null>(null);
+
+    // Terrain & Scatter Interactive Brush State
+    const brushStrokeRef = useRef<{
+      active: boolean;
+      mode: ViewportToolMode;
+      targetMesh: THREE.Mesh | null;
+      beforeSnapshot: TerrainGeometrySnapshot | null;
+      createdProps: THREE.Object3D[];
+      lastScatterPos: THREE.Vector3 | null;
+    }>({
+      active: false,
+      mode: 'orbit',
+      targetMesh: null,
+      beforeSnapshot: null,
+      createdProps: [],
+      lastScatterPos: null,
+    });
+
+    // Play Mode & Rigid-Body Physics State
+    const playModeActiveRef = useRef<boolean>(false);
+    const playSessionIdRef = useRef<number>(0);
+    const playCamModeRef = useRef<'third-person' | 'first-person'>('third-person');
+    const playerStateRef = useRef<PlayerControllerState | null>(null);
+    const playerAvatarRef = useRef<THREE.Group | null>(null);
+    const playerMixerRef = useRef<THREE.AnimationMixer | null>(null);
+    const playerActionsRef = useRef<{
+      idle?: THREE.AnimationAction;
+      walk?: THREE.AnimationAction;
+      run?: THREE.AnimationAction;
+      current?: 'idle' | 'walk' | 'run';
+    }>({});
+    const playerAvatarSourceRef = useRef<'glb' | 'procedural'>('procedural');
+    const hiddenTravelersRef = useRef<THREE.Object3D[]>([]);
+    const playCollidersRef = useRef<AabbCollider[]>([]);
+    const playWalkableMeshesRef = useRef<THREE.Mesh[]>([]);
+    const playTerrainMeshesRef = useRef<THREE.Mesh[]>([]);
+    const playRaycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+    const playRayOriginRef = useRef<THREE.Vector3>(new THREE.Vector3());
+    const playRayDownRef = useRef<THREE.Vector3>(new THREE.Vector3(0, -1, 0));
+    const playKeysRef = useRef<Set<string>>(new Set());
+    const playLookDragRef = useRef<{
+      active: boolean;
+      pointerId: number | null;
+      lastX: number;
+      lastY: number;
+    }>({
+      active: false,
+      pointerId: null,
+      lastX: 0,
+      lastY: 0,
+    });
+    const prePlaySnapshotRef = useRef<TransformSnapshotItem[] | null>(null);
+    const prePlayCamRef = useRef<{
+      pos: THREE.Vector3;
+      target: THREE.Vector3;
+      wasOrtho: boolean;
+    } | null>(null);
+    const physicsBodiesRef = useRef<RigidBodyState[]>([]);
+    const preLivePhysicsSnapshotRef = useRef<TransformSnapshotItem[] | null>(null);
+    const cursorWorldRef = useRef<[number, number, number]>([0, 0, 0]);
+    const fpsAccumRef = useRef<{ frames: number; lastStamp: number; fps: number }>({
+      frames: 0,
+      lastStamp: 0,
+      fps: 60,
+    });
 
     const mixerRef = useRef<THREE.AnimationMixer | null>(null);
     const clipsRef = useRef<THREE.AnimationClip[]>([]);
@@ -709,6 +998,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
     const reducedMotionRef = useRef<boolean>(false);
     const needsRenderRef = useRef<boolean>(true);
     const rafIdRef = useRef<number>(0);
+    const timerIdRef = useRef<number>(0);
+    const wakeLoopRef = useRef<(() => void) | null>(null);
     const pendingCamTargetPosRef = useRef<THREE.Vector3 | null>(null);
     const pendingOrbitTargetRef = useRef<THREE.Vector3 | null>(null);
     const activePresetNameRef = useRef<string>('Hero 3/4');
@@ -717,10 +1008,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       shadingPass,
       quadView,
       showGrid,
+      overlays,
+      cameraFov,
+      cameraSpeed,
       autoSpin,
       exploded,
       lightingPreset,
       lightAngleDeg,
+      sunElevationDeg,
+      shadowsEnabled,
       wireframeOpacity,
       insideOutSide,
       surfaceParams,
@@ -730,6 +1026,13 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       gizmoSpace,
       snapGrid,
       snapRotateDeg,
+      snapScale,
+      worldEnvPreset,
+      worldFogDensity,
+      worldFogHeight,
+      terrainBrush,
+      scatterBrush,
+      physicsConfig,
       toolMode,
       dragMode,
     });
@@ -737,10 +1040,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       shadingPass,
       quadView,
       showGrid,
+      overlays,
+      cameraFov,
+      cameraSpeed,
       autoSpin,
       exploded,
       lightingPreset,
       lightAngleDeg,
+      sunElevationDeg,
+      shadowsEnabled,
       wireframeOpacity,
       insideOutSide,
       surfaceParams,
@@ -750,13 +1058,33 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       gizmoSpace,
       snapGrid,
       snapRotateDeg,
+      snapScale,
+      worldEnvPreset,
+      worldFogDensity,
+      worldFogHeight,
+      terrainBrush,
+      scatterBrush,
+      physicsConfig,
       toolMode,
       dragMode,
     };
 
     const requestRender = useCallback(() => {
       needsRenderRef.current = true;
+      wakeLoopRef.current?.();
     }, []);
+
+    const notifyHistory = useCallback(() => {
+      onHistoryChange?.(getHistorySummary(historyRef.current));
+    }, [onHistoryChange]);
+
+    const recordUndoCommand = useCallback(
+      (label: string, undo: () => void, redo: () => void) => {
+        historyRef.current = pushHistoryCommand(historyRef.current, { label, undo, redo });
+        notifyHistory();
+      },
+      [notifyHistory]
+    );
 
     // Helper: emit scene telemetry, outliner, materials, bones, diagnostics
     const inspectActiveModel = useCallback(
@@ -824,6 +1152,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           if (obj.userData?.studioElementType === 'light') {
             nodes.push({
               uuid: obj.uuid,
+              parentUuid: obj.parent && obj.parent !== root ? obj.parent.uuid : null,
               name: obj.name || 'Light',
               type: 'Light',
               lightKind: (obj.userData.lightKind as SceneLightKind) || 'point',
@@ -840,6 +1169,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           if (obj.userData?.studioElementType === 'camera') {
             nodes.push({
               uuid: obj.uuid,
+              parentUuid: obj.parent && obj.parent !== root ? obj.parent.uuid : null,
               name: obj.name || 'Scene_Camera',
               type: 'Camera',
               isActiveCamera: obj.uuid === activeSceneCamUuidRef.current,
@@ -881,8 +1211,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
                 name: m.name || 'Standard BSDF',
                 type: m.type,
                 colorHex: std.color ? `#${std.color.getHexString()}` : '#7B7871',
+                emissiveHex: std.emissive ? `#${std.emissive.getHexString()}` : '#000000',
+                emissiveIntensity: typeof std.emissiveIntensity === 'number' ? std.emissiveIntensity : 0,
                 metalness: typeof std.metalness === 'number' ? std.metalness : 0,
                 roughness: typeof std.roughness === 'number' ? std.roughness : 0.6,
+                bumpScale: typeof std.bumpScale === 'number' ? std.bumpScale : 0,
                 maps: {
                   albedo: Boolean(std.map),
                   normal: Boolean(std.normalMap),
@@ -911,6 +1244,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           if (isMesh || isBone || isGroup || isLight) {
             nodes.push({
               uuid: obj.uuid,
+              parentUuid: obj.parent && obj.parent !== root ? obj.parent.uuid : null,
               name: obj.name || obj.type,
               type: isSkinned
                 ? 'SkinnedMesh'
@@ -981,6 +1315,29 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const targetObj = selectedNodeUuidRef.current
           ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
           : root;
+        const targetBox = new THREE.Box3().setFromObject(targetObj);
+        const targetSize = new THREE.Vector3();
+        targetBox.getSize(targetSize);
+        const targetWorldPos = new THREE.Vector3();
+        targetObj.getWorldPosition(targetWorldPos);
+
+        setHudState((prev) => ({
+          ...prev,
+          objectCount: nodes.length,
+          triangleCount,
+          vertexCount,
+          selectedName: targetObj === root ? null : targetObj.name || 'Object',
+          selectedDimensions: [
+            Number.isFinite(targetSize.x) ? targetSize.x : size.x,
+            Number.isFinite(targetSize.y) ? targetSize.y : size.y,
+            Number.isFinite(targetSize.z) ? targetSize.z : size.z,
+          ],
+          cursorPosition:
+            targetObj === root
+              ? cursorWorldRef.current
+              : [targetWorldPos.x, targetWorldPos.y, targetWorldPos.z],
+        }));
+
         onSelectedLightChange(extractSelectedLightInfo(targetObj));
         onSelectedCameraChange(
           extractSelectedCameraInfo(targetObj, activeSceneCamUuidRef.current, lookingThroughCamRef.current)
@@ -1041,10 +1398,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const tc = transformCtrlRef.current;
       const root = activeModelRootRef.current;
       if (!tc) return;
-      const { gizmoMode: mode, gizmoSpace: space, snapGrid: gSnap, snapRotateDeg: rSnap } =
-        propsRef.current;
+      const {
+        gizmoMode: mode,
+        gizmoSpace: space,
+        snapGrid: gSnap,
+        snapRotateDeg: rSnap,
+        snapScale: sSnap,
+      } = propsRef.current;
 
-      if (mode === 'none' || !root || lookingThroughCamRef.current) {
+      if (mode === 'none' || !root || lookingThroughCamRef.current || playModeActiveRef.current) {
         tc.detach();
         requestRender();
         return;
@@ -1064,6 +1426,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       tc.setSpace(space);
       tc.setTranslationSnap(gSnap > 0 ? gSnap : null);
       tc.setRotationSnap(rSnap > 0 ? THREE.MathUtils.degToRad(rSnap) : null);
+      tc.setScaleSnap(sSnap > 0 ? sSnap : null);
       tc.attach(target);
       requestRender();
     }, [requestRender]);
@@ -1146,6 +1509,15 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         pointsOverlayRef.current = null;
       }
 
+      // Dispose any previously allocated temporary shading-override materials (fixes GPU memory leak)
+      tempOverrideMaterialsRef.current.forEach((m) => m.dispose());
+      tempOverrideMaterialsRef.current.clear();
+
+      const trackTempMat = <T extends THREE.Material>(m: T): T => {
+        tempOverrideMaterialsRef.current.add(m);
+        return m;
+      };
+
       const sideVal =
         culling === 'back'
           ? THREE.BackSide
@@ -1172,63 +1544,77 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
 
         if (pass === 'normal') {
-          mesh.material = new THREE.MeshNormalMaterial({
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshNormalMaterial({
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'matcap') {
-          mesh.material = new THREE.MeshMatcapMaterial({
-            matcap: matcapTexRef.current,
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshMatcapMaterial({
+              matcap: matcapTexRef.current,
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'xray') {
-          mesh.material = new THREE.MeshStandardMaterial({
-            color: '#2D5A4C',
-            transparent: true,
-            opacity: 0.28,
-            depthWrite: false,
-            roughness: 0.35,
-            side: THREE.DoubleSide,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshStandardMaterial({
+              color: '#2D5A4C',
+              transparent: true,
+              opacity: 0.28,
+              depthWrite: false,
+              roughness: 0.35,
+              side: THREE.DoubleSide,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'uv') {
-          mesh.material = new THREE.MeshStandardMaterial({
-            map: uvTexRef.current,
-            roughness: 0.65,
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshStandardMaterial({
+              map: uvTexRef.current,
+              roughness: 0.65,
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'roughness') {
           const origStd = (Array.isArray(orig) ? orig[0] : orig) as THREE.MeshStandardMaterial;
           const rVal = sp.overrideEnabled ? sp.roughness : origStd?.roughness ?? 0.6;
           const grey = Math.round(rVal * 255);
-          mesh.material = new THREE.MeshBasicMaterial({
-            color: new THREE.Color(`rgb(${grey},${grey},${grey})`),
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshBasicMaterial({
+              color: new THREE.Color(`rgb(${grey},${grey},${grey})`),
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'albedo') {
           const origStd = (Array.isArray(orig) ? orig[0] : orig) as THREE.MeshStandardMaterial;
-          mesh.material = new THREE.MeshBasicMaterial({
-            color: sp.overrideEnabled
-              ? new THREE.Color(sp.baseColor)
-              : origStd?.color
-                ? origStd.color.clone()
-                : new THREE.Color('#7B7871'),
-            map: sp.overrideEnabled ? null : origStd?.map ?? null,
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshBasicMaterial({
+              color: sp.overrideEnabled
+                ? new THREE.Color(sp.baseColor)
+                : origStd?.color
+                  ? origStd.color.clone()
+                  : new THREE.Color('#7B7871'),
+              map: sp.overrideEnabled ? null : origStd?.map ?? null,
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else if (pass === 'points') {
-          mesh.material = new THREE.MeshBasicMaterial({
-            color: '#D5CFC5',
-            transparent: true,
-            opacity: 0.12,
-            depthWrite: false,
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshBasicMaterial({
+              color: '#D5CFC5',
+              transparent: true,
+              opacity: 0.12,
+              depthWrite: false,
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
           if (ptsGroup && mesh.visible) {
             const pMat = new THREE.PointsMaterial({
               color: '#2D5A4C',
@@ -1242,21 +1628,25 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             ptsGroup.add(pts);
           }
         } else if (sp.overrideEnabled) {
-          mesh.material = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(sp.baseColor),
-            metalness: sp.metallic,
-            roughness: sp.roughness,
-            emissive: new THREE.Color(sp.baseColor),
-            emissiveIntensity: sp.emission,
-            bumpScale: sp.normalStrength * 0.012,
-            side: sideVal,
-            clippingPlanes: activePlanes,
-          });
+          mesh.material = trackTempMat(
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color(sp.baseColor),
+              metalness: sp.metallic,
+              roughness: sp.roughness,
+              emissive: new THREE.Color(sp.baseColor),
+              emissiveIntensity: sp.emission,
+              bumpScale: sp.normalStrength * 0.012,
+              side: sideVal,
+              clippingPlanes: activePlanes,
+            })
+          );
         } else {
           mesh.material = orig;
           const mats = Array.isArray(orig) ? orig : [orig];
           for (const m of mats) {
-            m.side = sideVal;
+            if (culling !== 'front') {
+              m.side = sideVal;
+            }
             m.clippingPlanes = activePlanes;
             m.needsUpdate = true;
           }
@@ -1290,7 +1680,89 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       requestRender();
     }, [requestRender]);
 
-    // Apply lighting preset & key light azimuth angle
+    // Sync Viewport Overlays (Axes, Model Bounding Box, UCX/Static Colliders)
+    const syncViewportOverlays = useCallback(() => {
+      const scene = sceneRef.current;
+      const root = activeModelRootRef.current;
+      if (!scene) return;
+      const { overlays: ov } = propsRef.current;
+
+      if (gridRef.current) {
+        gridRef.current.visible = ov.showGrid;
+      }
+      if (axesHelperRef.current) {
+        axesHelperRef.current.visible = ov.showAxes;
+      }
+
+      // Root / Active Model Bounding Box overlay
+      if (modelBoundsHelperRef.current) {
+        scene.remove(modelBoundsHelperRef.current);
+        modelBoundsHelperRef.current.dispose();
+        modelBoundsHelperRef.current = null;
+      }
+      if (ov.showBounds && root) {
+        const helper = new THREE.BoxHelper(root, 0xb8863b);
+        helper.userData.isEditorHelper = true;
+        scene.add(helper);
+        modelBoundsHelperRef.current = helper;
+      }
+
+      // Collider visualization overlay (UCX_ meshes + static physics AABBs)
+      if (colliderOverlayGroupRef.current) {
+        scene.remove(colliderOverlayGroupRef.current);
+        colliderOverlayGroupRef.current.traverse((o) => {
+          if ((o as THREE.LineSegments).isLineSegments) {
+            (o as THREE.LineSegments).geometry.dispose();
+            ((o as THREE.LineSegments).material as THREE.Material).dispose();
+          }
+        });
+        colliderOverlayGroupRef.current = null;
+      }
+
+      if (root) {
+        root.traverse((obj) => {
+          if (obj.userData?.isColliderOverlay || (obj.name || '').toLowerCase().startsWith('ucx_')) {
+            obj.visible = ov.showColliders;
+          }
+        });
+      }
+
+      if (ov.showColliders && root) {
+        const grp = new THREE.Group();
+        grp.name = '__ColliderOverlays';
+        grp.userData.isEditorHelper = true;
+        const colliders = collectWorldColliders(root);
+        for (const c of colliders) {
+          const sx = Math.max(0.05, c.maxX - c.minX);
+          const sy = Math.max(0.05, c.maxY - c.minY);
+          const sz = Math.max(0.05, c.maxZ - c.minZ);
+          const boxGeo = new THREE.BoxGeometry(sx, sy, sz);
+          const edges = new THREE.EdgesGeometry(boxGeo);
+          boxGeo.dispose();
+          const lines = new THREE.LineSegments(
+            edges,
+            new THREE.LineBasicMaterial({
+              color: c.isStatic ? '#2D5A4C' : '#C26D2D',
+              transparent: true,
+              opacity: 0.72,
+            })
+          );
+          lines.position.set(
+            (c.minX + c.maxX) * 0.5,
+            (c.minY + c.maxY) * 0.5,
+            (c.minZ + c.maxZ) * 0.5
+          );
+          lines.userData.isEditorHelper = true;
+          grp.add(lines);
+        }
+        scene.add(grp);
+        colliderOverlayGroupRef.current = grp;
+      }
+
+      requestRender();
+    }, [requestRender]);
+
+    // Apply lighting preset, dynamic sun azimuth + elevation, and shadows toggle
     const applyLighting = useCallback(() => {
       const key = keyLightRef.current;
       const rim = rimLightRef.current;
@@ -1299,29 +1771,41 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       const renderer = rendererRef.current;
       if (!key || !rim || !fill || !hemi || !renderer) return;
 
-      const { lightingPreset: preset, lightAngleDeg: angleDeg } = propsRef.current;
-      const rad = THREE.MathUtils.degToRad(angleDeg);
-      const dist = 5.4;
-      key.position.set(Math.cos(rad) * dist, 5.2, Math.sin(rad) * dist);
-      rim.position.set(-Math.cos(rad) * dist * 0.85, 3.6, -Math.sin(rad) * dist * 0.85);
+      const {
+        lightingPreset: preset,
+        lightAngleDeg: angleDeg,
+        sunElevationDeg: elevDeg,
+        shadowsEnabled: shadowsOn,
+      } = propsRef.current;
+      const azRad = THREE.MathUtils.degToRad(angleDeg);
+      const elRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(elevDeg, 6, 86));
+      const dist = 16;
+      const horiz = Math.cos(elRad) * dist;
+      const vert = Math.sin(elRad) * dist;
+      key.position.set(Math.cos(azRad) * horiz, vert, Math.sin(azRad) * horiz);
+      rim.position.set(-Math.cos(azRad) * horiz * 0.75, Math.max(4, vert * 0.7), -Math.sin(azRad) * horiz * 0.75);
+
+      const allowShadows = shadowsOn && !isSoftwareGlRef.current;
+      renderer.shadowMap.enabled = allowShadows;
+      key.castShadow = allowShadows;
 
       if (preset === 'architectural') {
         key.color.set('#FFF8EB');
-        key.intensity = 2.8;
-        fill.color.set('#E2ECF5');
-        fill.intensity = 1.05;
+        key.intensity = 2.85;
+        fill.color.set('#D8ECFA');
+        fill.intensity = 1.15;
         rim.color.set('#FFFFFF');
-        rim.intensity = 0.8;
-        hemi.intensity = 0.85;
+        rim.intensity = 0.85;
+        hemi.intensity = 0.88;
         renderer.toneMappingExposure = 1.08;
       } else if (preset === 'high-contrast') {
         key.color.set('#FFF2DF');
         key.intensity = 3.4;
         fill.color.set('#CBD4DE');
-        fill.intensity = 0.42;
+        fill.intensity = 0.45;
         rim.color.set('#DCE8E3');
         rim.intensity = 1.6;
-        hemi.intensity = 0.4;
+        hemi.intensity = 0.42;
         renderer.toneMappingExposure = 1.02;
       } else if (preset === 'soft-clay') {
         key.color.set('#FFF5E8');
@@ -1334,25 +1818,44 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         renderer.toneMappingExposure = 1.06;
       } else {
         key.color.set('#FFF4E4');
-        key.intensity = 2.6;
+        key.intensity = 2.65;
         fill.color.set('#DCE7F0');
-        fill.intensity = 0.85;
+        fill.intensity = 0.9;
         rim.color.set('#EDF4F1');
         rim.intensity = 1.05;
-        hemi.intensity = 0.72;
-        renderer.toneMappingExposure = 1.04;
+        hemi.intensity = 0.78;
+        renderer.toneMappingExposure = 1.05;
       }
       requestRender();
     }, [requestRender]);
 
-    // Apply World Environment preset & fog
+    // Apply World Environment preset, Procedural Sky Dome, and Distance / Height Fog
     const updateWorldEnvironment = useCallback(
-      (preset: WorldEnvironmentPreset, fogDensity: number) => {
+      (preset: WorldEnvironmentPreset, fogDensity: number, fogHeight = 0) => {
         const scene = sceneRef.current;
         if (!scene) return;
         const hex = WORLD_ENV_BG[preset] || '#ECEAE4';
         scene.background = new THREE.Color(hex);
-        scene.fog = fogDensity > 0.0005 ? new THREE.FogExp2(hex, fogDensity) : null;
+        const effDensity = Math.max(0, fogDensity + fogHeight * 0.004);
+        scene.fog = effDensity > 0.0005 ? new THREE.FogExp2(hex, effDensity) : null;
+
+        if (skyDomeRef.current) {
+          const grad = WORLD_SKY_GRADIENT[preset] || WORLD_SKY_GRADIENT.alabaster;
+          const showDome = preset !== 'alabaster';
+          skyDomeRef.current.visible = showDome;
+          const mat = skyDomeRef.current.material as THREE.ShaderMaterial;
+          if (mat.uniforms) {
+            mat.uniforms.uZenith.value.set(grad.zenith);
+            mat.uniforms.uHorizon.value.set(grad.horizon);
+            mat.uniforms.uNadir.value.set(grad.nadir);
+            if (mat.uniforms.uWarmHorizon && grad.warmHorizon) {
+              mat.uniforms.uWarmHorizon.value.set(grad.warmHorizon);
+            }
+            if (mat.uniforms.uWarmFactor) {
+              mat.uniforms.uWarmFactor.value = preset === 'celestial' ? 1.0 : 0.0;
+            }
+          }
+        }
         requestRender();
       },
       [requestRender]
@@ -1475,8 +1978,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         if (pointCloudRef.current) {
           pointCloudRef.current.group.visible = false;
         }
+        const preserveWorldScale = Boolean(root.userData?.preserveWorldScale);
         if (contactShadowRef.current) {
-          contactShadowRef.current.visible = true;
+          contactShadowRef.current.visible = !preserveWorldScale;
         }
 
         root.updateMatrixWorld(true);
@@ -1486,18 +1990,20 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         rawBox.getSize(rawSize);
         rawBox.getCenter(rawCenter);
 
-        const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z);
-        if (maxDim > 4.8 || (maxDim > 0 && maxDim < 0.35)) {
-          const scale = 1.65 / maxDim;
-          root.scale.multiplyScalar(scale);
+        if (!preserveWorldScale) {
+          const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z);
+          if (maxDim > 8.5 || (maxDim > 0 && maxDim < 0.35)) {
+            const scale = 1.65 / maxDim;
+            root.scale.multiplyScalar(scale);
+            root.updateMatrixWorld(true);
+            rawBox.setFromObject(root);
+            rawBox.getCenter(rawCenter);
+          }
+          root.position.x -= rawCenter.x;
+          root.position.z -= rawCenter.z;
+          root.position.y -= rawBox.min.y;
           root.updateMatrixWorld(true);
-          rawBox.setFromObject(root);
-          rawBox.getCenter(rawCenter);
         }
-        root.position.x -= rawCenter.x;
-        root.position.z -= rawCenter.z;
-        root.position.y -= rawBox.min.y;
-        root.updateMatrixWorld(true);
 
         const modelCenter = new THREE.Vector3();
         new THREE.Box3().setFromObject(root).getCenter(modelCenter);
@@ -1506,6 +2012,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         scene.add(root);
         activeModelRootRef.current = root;
         activeModelDisposeRef.current = disposeFn;
+        historyRef.current = clearHistoryStack(historyRef.current);
+        notifyHistory();
 
         if (initialBoneQuatsRef.current.size > 0) {
           const helper = new THREE.SkeletonHelper(root);
@@ -1537,7 +2045,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
 
         frameModel(root, instantFrame);
+
         applyVisualMaterials();
+        syncViewportOverlays();
         inspectActiveModel(displayName);
         syncTransformGizmo();
       },
@@ -1546,9 +2056,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         disposeCurrentModel,
         frameModel,
         inspectActiveModel,
+        notifyHistory,
         onAnimationsChange,
         registerMeshesInSubtree,
         syncTransformGizmo,
+        syncViewportOverlays,
       ]
     );
 
@@ -1556,6 +2068,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       if (activeModelRootRef.current) return activeModelRootRef.current;
       const worldGroup = new THREE.Group();
       worldGroup.name = 'World_Assembly';
+      worldGroup.userData.preserveWorldScale = true;
       mountModelObject(worldGroup, 'World Assembly', [], () => {}, true);
       return worldGroup;
     }, [mountModelObject]);
@@ -1707,6 +2220,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           hero: 'Hero 3/4',
         };
         activePresetNameRef.current = labels[preset];
+        setActivePresetLabel(labels[preset]);
 
         if (isSoftwareGlRef.current || reducedMotionRef.current) {
           cam.position.copy(dest);
@@ -1721,6 +2235,42 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       },
       [requestRender]
     );
+
+    const focusSelected = useCallback(() => {
+      const root = activeModelRootRef.current;
+      const cam = activeCamRef.current;
+      const orbit = orbitRef.current;
+      if (!root || !cam || !orbit) return;
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+        : root;
+      target.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(target);
+      if (box.isEmpty()) return;
+      const center = new THREE.Vector3();
+      const size = new THREE.Vector3();
+      box.getCenter(center);
+      box.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+      const dist = Math.max(1.4, maxDim * 2.15);
+      const dir = cam.position.clone().sub(orbit.target);
+      if (dir.lengthSq() < 1e-4) dir.set(0.7, 0.45, 0.8);
+      dir.normalize().multiplyScalar(dist);
+      const dest = center.clone().add(dir);
+
+      if (isSoftwareGlRef.current || reducedMotionRef.current) {
+        cam.position.copy(dest);
+        orbit.target.copy(center);
+        orbit.update();
+        pendingCamTargetPosRef.current = null;
+        pendingOrbitTargetRef.current = null;
+      } else {
+        pendingCamTargetPosRef.current = dest;
+        pendingOrbitTargetRef.current = center;
+      }
+      onNotify(`Focused ${target.name || 'Selection'}`);
+      requestRender();
+    }, [onNotify, requestRender]);
 
     const toggleOrtho = useCallback(() => {
       const persp = perspCamRef.current;
@@ -1764,12 +2314,12 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         if (!cam || !orbit) return;
         if ((cam as THREE.OrthographicCamera).isOrthographicCamera) {
           const o = cam as THREE.OrthographicCamera;
-          o.zoom = THREE.MathUtils.clamp(o.zoom / factor, 0.25, 8);
+          o.zoom = THREE.MathUtils.clamp(o.zoom / factor, 0.08, 18);
           o.updateProjectionMatrix();
         } else {
           const offset = cam.position.clone().sub(orbit.target);
           offset.multiplyScalar(factor);
-          const len = THREE.MathUtils.clamp(offset.length(), 0.7, 28);
+          const len = THREE.MathUtils.clamp(offset.length(), 0.25, 450);
           offset.setLength(len);
           cam.position.copy(orbit.target).add(offset);
         }
@@ -2247,13 +2797,67 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       [captionModelName, inspectActiveModel, requestRender]
     );
 
-    // Blender World Assembly Operations
+    // Undo & Redo Actions
+    const undo = useCallback(() => {
+      const res = stepUndo(historyRef.current);
+      historyRef.current = res.stack;
+      notifyHistory();
+      if (res.command) {
+        updateSelectionBox();
+        applyVisualMaterials();
+        syncViewportOverlays();
+        inspectActiveModel(captionModelName);
+        syncTransformGizmo();
+        requestRender();
+        onNotify(`Undid: ${res.command.label}`);
+      } else {
+        onNotify('Nothing to undo');
+      }
+    }, [
+      applyVisualMaterials,
+      captionModelName,
+      inspectActiveModel,
+      notifyHistory,
+      onNotify,
+      requestRender,
+      syncTransformGizmo,
+      syncViewportOverlays,
+      updateSelectionBox,
+    ]);
+
+    const redo = useCallback(() => {
+      const res = stepRedo(historyRef.current);
+      historyRef.current = res.stack;
+      notifyHistory();
+      if (res.command) {
+        updateSelectionBox();
+        applyVisualMaterials();
+        syncViewportOverlays();
+        inspectActiveModel(captionModelName);
+        syncTransformGizmo();
+        requestRender();
+        onNotify(`Redid: ${res.command.label}`);
+      } else {
+        onNotify('Nothing to redo');
+      }
+    }, [
+      applyVisualMaterials,
+      captionModelName,
+      inspectActiveModel,
+      notifyHistory,
+      onNotify,
+      requestRender,
+      syncTransformGizmo,
+      syncViewportOverlays,
+      updateSelectionBox,
+    ]);
+
+    // Blender World Assembly Operations (All tracked in Undo/Redo History)
     const addWorldPrimitive = useCallback(
       (kind: WorldPrimitiveKind) => {
         const root = ensureWorldRoot();
         const idx = primitiveCounterRef.current++;
         const obj = createWorldPrimitive(kind, idx, { isSoftwareGl: isSoftwareGlRef.current });
-        // Offset slightly if stage already has objects so new mesh primitives don't stack invisibly
         if (
           root.children.length > 0 &&
           kind !== 'terrain' &&
@@ -2263,8 +2867,8 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           kind !== 'scene-camera'
         ) {
           const ring = ((idx - 1) % 6) * (Math.PI / 3);
-          obj.position.x += Math.cos(ring) * 1.15;
-          obj.position.z += Math.sin(ring) * 1.15;
+          obj.position.x += Math.cos(ring) * 1.35;
+          obj.position.z += Math.sin(ring) * 1.35;
         }
         root.add(obj);
 
@@ -2282,11 +2886,37 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           registerMeshesInSubtree(obj, modelCenterRef.current);
         }
 
+        const prevSelected = selectedNodeUuidRef.current;
+        recordUndoCommand(
+          `Add ${obj.name}`,
+          () => {
+            transformCtrlRef.current?.detach();
+            root.remove(obj);
+            selectedNodeUuidRef.current = prevSelected;
+            onSelectedNodeChange(prevSelected);
+          },
+          () => {
+            root.add(obj);
+            selectedNodeUuidRef.current = obj.uuid;
+            onSelectedNodeChange(obj.uuid);
+          }
+        );
+
         applyVisualMaterials();
+        syncViewportOverlays();
         selectNode(obj.uuid);
         onNotify(`Added ${obj.name} to World`);
       },
-      [applyVisualMaterials, ensureWorldRoot, onNotify, registerMeshesInSubtree, selectNode]
+      [
+        applyVisualMaterials,
+        ensureWorldRoot,
+        onNotify,
+        onSelectedNodeChange,
+        recordUndoCommand,
+        registerMeshesInSubtree,
+        selectNode,
+        syncViewportOverlays,
+      ]
     );
 
     const duplicateSelected = useCallback(() => {
@@ -2300,15 +2930,42 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         onNotify('Select an object to duplicate');
         return;
       }
+      const parent = source.parent;
       const clone = source.clone(true);
       clone.name = `${source.name || 'Node'}_Copy_${primitiveCounterRef.current++}`;
-      clone.position.x += 0.75;
-      source.parent.add(clone);
+      clone.position.x += 0.85;
+      parent.add(clone);
       registerMeshesInSubtree(clone, modelCenterRef.current);
+
+      const prevSelected = selectedNodeUuidRef.current;
+      recordUndoCommand(
+        `Duplicate ${source.name}`,
+        () => {
+          transformCtrlRef.current?.detach();
+          parent.remove(clone);
+          selectedNodeUuidRef.current = prevSelected;
+          onSelectedNodeChange(prevSelected);
+        },
+        () => {
+          parent.add(clone);
+          selectedNodeUuidRef.current = clone.uuid;
+          onSelectedNodeChange(clone.uuid);
+        }
+      );
+
       applyVisualMaterials();
+      syncViewportOverlays();
       selectNode(clone.uuid);
       onNotify(`Duplicated ${source.name}`);
-    }, [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]);
+    }, [
+      applyVisualMaterials,
+      onNotify,
+      onSelectedNodeChange,
+      recordUndoCommand,
+      registerMeshesInSubtree,
+      selectNode,
+      syncViewportOverlays,
+    ]);
 
     const deleteSelected = useCallback(() => {
       const root = activeModelRootRef.current;
@@ -2325,6 +2982,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         onNotify(`${target.name} is locked`);
         return;
       }
+      const parent = target.parent;
       if (target.uuid === activeSceneCamUuidRef.current) {
         activeSceneCamUuidRef.current = null;
         if (lookingThroughCamRef.current) {
@@ -2334,12 +2992,156 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
       }
       transformCtrlRef.current?.detach();
-      target.parent.remove(target);
+      parent.remove(target);
+
+      recordUndoCommand(
+        `Delete ${target.name}`,
+        () => {
+          parent.add(target);
+          selectedNodeUuidRef.current = target.uuid;
+          onSelectedNodeChange(target.uuid);
+        },
+        () => {
+          transformCtrlRef.current?.detach();
+          parent.remove(target);
+          selectedNodeUuidRef.current = null;
+          onSelectedNodeChange(null);
+        }
+      );
+
       selectNode(null);
       applyVisualMaterials();
+      syncViewportOverlays();
       inspectActiveModel(captionModelName);
-      onNotify(`Deleted ${target.name}`);
-    }, [applyVisualMaterials, captionModelName, inspectActiveModel, onNotify, selectNode]);
+      onNotify(`Deleted ${target.name} (Ctrl+Z to restore)`);
+    }, [
+      applyVisualMaterials,
+      captionModelName,
+      inspectActiveModel,
+      onNotify,
+      onSelectedNodeChange,
+      recordUndoCommand,
+      selectNode,
+      syncViewportOverlays,
+    ]);
+
+    // Outliner Parent/Child Grouping & Reparenting
+    const groupSelectedNode = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root) return;
+      const target = selectedNodeUuidRef.current
+        ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || null
+        : null;
+      if (!target || target === root || !target.parent) {
+        // Create an empty child Group under root
+        const grp = new THREE.Group();
+        grp.name = `Group_${primitiveCounterRef.current++}`;
+        root.add(grp);
+        recordUndoCommand(
+          `Create ${grp.name}`,
+          () => {
+            root.remove(grp);
+            selectedNodeUuidRef.current = null;
+            onSelectedNodeChange(null);
+          },
+          () => {
+            root.add(grp);
+            selectedNodeUuidRef.current = grp.uuid;
+            onSelectedNodeChange(grp.uuid);
+          }
+        );
+        selectNode(grp.uuid);
+        onNotify(`Created ${grp.name}`);
+        return;
+      }
+      const oldParent = target.parent;
+      const grp = new THREE.Group();
+      grp.name = `${target.name || 'Node'}_Group_${primitiveCounterRef.current++}`;
+      oldParent.add(grp);
+      grp.attach(target);
+
+      recordUndoCommand(
+        `Group ${target.name}`,
+        () => {
+          oldParent.attach(target);
+          oldParent.remove(grp);
+          selectedNodeUuidRef.current = target.uuid;
+          onSelectedNodeChange(target.uuid);
+        },
+        () => {
+          oldParent.add(grp);
+          grp.attach(target);
+          selectedNodeUuidRef.current = grp.uuid;
+          onSelectedNodeChange(grp.uuid);
+        }
+      );
+
+      selectNode(grp.uuid);
+      onNotify(`Grouped ${target.name} inside ${grp.name}`);
+    }, [onNotify, onSelectedNodeChange, recordUndoCommand, selectNode]);
+
+    const reparentNode = useCallback(
+      (childUuid: string, newParentUuid: string) => {
+        const root = activeModelRootRef.current;
+        if (!root || childUuid === newParentUuid) return;
+        const child = root.getObjectByProperty('uuid', childUuid);
+        const newParent = root.getObjectByProperty('uuid', newParentUuid);
+        if (!child || !newParent || child === root || !child.parent) return;
+        // Prevent circular parenting (cannot parent an ancestor under its own descendant)
+        let walker: THREE.Object3D | null = newParent;
+        while (walker) {
+          if (walker === child) {
+            onNotify('Cannot parent a group into its own child');
+            return;
+          }
+          walker = walker.parent;
+        }
+        const oldParent = child.parent;
+        if (oldParent === newParent) return;
+        newParent.attach(child);
+
+        recordUndoCommand(
+          `Parent ${child.name} to ${newParent.name}`,
+          () => {
+            oldParent.attach(child);
+          },
+          () => {
+            newParent.attach(child);
+          }
+        );
+        inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Parented ${child.name} under ${newParent.name}`);
+      },
+      [captionModelName, inspectActiveModel, onNotify, recordUndoCommand, requestRender]
+    );
+
+    const unparentNode = useCallback(
+      (uuid: string) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const child = root.getObjectByProperty('uuid', uuid);
+        if (!child || child === root || !child.parent || child.parent === root) {
+          onNotify('Node is already at root level');
+          return;
+        }
+        const oldParent = child.parent;
+        root.attach(child);
+        recordUndoCommand(
+          `Unparent ${child.name}`,
+          () => {
+            oldParent.attach(child);
+          },
+          () => {
+            root.attach(child);
+          }
+        );
+        inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Moved ${child.name} to root level`);
+      },
+      [captionModelName, inspectActiveModel, onNotify, recordUndoCommand, requestRender]
+    );
 
     const mirrorSelected = useCallback(
       (axis: 'x' | 'y' | 'z') => {
@@ -2348,16 +3150,20 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const target = selectedNodeUuidRef.current
           ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
           : root;
-        if (axis === 'x') target.scale.x *= -1;
-        if (axis === 'y') target.scale.y *= -1;
-        if (axis === 'z') target.scale.z *= -1;
-        target.updateMatrixWorld(true);
+        const applyFlip = () => {
+          if (axis === 'x') target.scale.x *= -1;
+          if (axis === 'y') target.scale.y *= -1;
+          if (axis === 'z') target.scale.z *= -1;
+          target.updateMatrixWorld(true);
+        };
+        applyFlip();
+        recordUndoCommand(`Mirror ${target.name} (${axis.toUpperCase()})`, applyFlip, applyFlip);
         updateSelectionBox();
         inspectActiveModel(captionModelName);
         requestRender();
         onNotify(`Mirrored ${target.name} across ${axis.toUpperCase()}`);
       },
-      [captionModelName, inspectActiveModel, onNotify, requestRender, updateSelectionBox]
+      [captionModelName, inspectActiveModel, onNotify, recordUndoCommand, requestRender, updateSelectionBox]
     );
 
     const snapSelectedToGround = useCallback(() => {
@@ -2369,14 +3175,27 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       target.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(target);
       if (Number.isFinite(box.min.y)) {
-        target.position.y -= box.min.y;
+        const prevY = target.position.y;
+        const nextY = prevY - box.min.y;
+        target.position.y = nextY;
         target.updateMatrixWorld(true);
+        recordUndoCommand(
+          `Snap ${target.name} to Ground`,
+          () => {
+            target.position.y = prevY;
+            target.updateMatrixWorld(true);
+          },
+          () => {
+            target.position.y = nextY;
+            target.updateMatrixWorld(true);
+          }
+        );
         updateSelectionBox();
         inspectActiveModel(captionModelName);
         requestRender();
         onNotify(`Snapped ${target.name} flush to Y = 0`);
       }
-    }, [captionModelName, inspectActiveModel, onNotify, requestRender, updateSelectionBox]);
+    }, [captionModelName, inspectActiveModel, onNotify, recordUndoCommand, requestRender, updateSelectionBox]);
 
     const toggleSelectedFlatShading = useCallback(() => {
       const root = activeModelRootRef.current;
@@ -2416,11 +3235,33 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const arrGroup = buildArrayModifierClones(target, count, offset);
         root.add(arrGroup);
         registerMeshesInSubtree(arrGroup, modelCenterRef.current);
+        recordUndoCommand(
+          `Array ${count}× ${target.name}`,
+          () => {
+            root.remove(arrGroup);
+            selectedNodeUuidRef.current = null;
+            onSelectedNodeChange(null);
+          },
+          () => {
+            root.add(arrGroup);
+            selectedNodeUuidRef.current = arrGroup.uuid;
+            onSelectedNodeChange(arrGroup.uuid);
+          }
+        );
         applyVisualMaterials();
+        syncViewportOverlays();
         selectNode(arrGroup.uuid);
         onNotify(`Applied ${count}× Array Modifier`);
       },
-      [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]
+      [
+        applyVisualMaterials,
+        onNotify,
+        onSelectedNodeChange,
+        recordUndoCommand,
+        registerMeshesInSubtree,
+        selectNode,
+        syncViewportOverlays,
+      ]
     );
 
     const applyScatterModifier = useCallback(
@@ -2434,12 +3275,562 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         const scatterGrp = buildScatterInstances(target, count, radius, Date.now() % 99991);
         root.add(scatterGrp);
         registerMeshesInSubtree(scatterGrp, modelCenterRef.current);
+        recordUndoCommand(
+          `Scatter ${count}× ${target.name}`,
+          () => {
+            root.remove(scatterGrp);
+            selectedNodeUuidRef.current = null;
+            onSelectedNodeChange(null);
+          },
+          () => {
+            root.add(scatterGrp);
+            selectedNodeUuidRef.current = scatterGrp.uuid;
+            onSelectedNodeChange(scatterGrp.uuid);
+          }
+        );
         applyVisualMaterials();
+        syncViewportOverlays();
         selectNode(scatterGrp.uuid);
         onNotify(`Scattered ${count} instances within ${radius}m`);
       },
-      [applyVisualMaterials, onNotify, registerMeshesInSubtree, selectNode]
+      [
+        applyVisualMaterials,
+        onNotify,
+        onSelectedNodeChange,
+        recordUndoCommand,
+        registerMeshesInSubtree,
+        selectNode,
+        syncViewportOverlays,
+      ]
     );
+
+    // Direct PBR Material Editing (Albedo, Metalness, Roughness, Emissive, Procedural Normal/Bump)
+    const editMaterial = useCallback(
+      (payload: MaterialEditPayload) => {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+
+        const targetMats = new Set<THREE.MeshStandardMaterial>();
+        const targetObj = selectedNodeUuidRef.current
+          ? root.getObjectByProperty('uuid', selectedNodeUuidRef.current) || root
+          : root;
+
+        const scan = (node: THREE.Object3D) => {
+          node.traverse((o) => {
+            if (!(o as THREE.Mesh).isMesh || isInsideEditorElement(o)) return;
+            const orig = originalMaterialsRef.current.get(o as THREE.Mesh) ?? (o as THREE.Mesh).material;
+            const mats = Array.isArray(orig) ? orig : [orig];
+            for (const m of mats) {
+              if (!m) continue;
+              if (payload.materialUuid) {
+                if (m.uuid === payload.materialUuid) {
+                  targetMats.add(m as THREE.MeshStandardMaterial);
+                }
+              } else {
+                targetMats.add(m as THREE.MeshStandardMaterial);
+              }
+            }
+          });
+        };
+
+        if (payload.materialUuid) scan(root);
+        else scan(targetObj);
+
+        if (targetMats.size === 0) {
+          onNotify('No editable PBR material found on selection');
+          return;
+        }
+
+        const prevStates = Array.from(targetMats).map((m) => ({
+          mat: m,
+          color: m.color ? m.color.clone() : new THREE.Color('#808080'),
+          metalness: m.metalness ?? 0,
+          roughness: m.roughness ?? 0.6,
+          emissive: m.emissive ? m.emissive.clone() : new THREE.Color('#000000'),
+          emissiveIntensity: m.emissiveIntensity ?? 0,
+          bumpScale: m.bumpScale ?? 0,
+          map: m.map ?? null,
+          bumpMap: m.bumpMap ?? null,
+        }));
+
+        const generatedMaps =
+          payload.proceduralPattern && payload.proceduralPattern !== 'none'
+            ? createProceduralMaterialMaps(payload.proceduralPattern, payload.colorHex)
+            : null;
+
+        const applyNext = () => {
+          targetMats.forEach((m) => {
+            if (m.color) m.color.set(payload.colorHex);
+            if (typeof m.metalness === 'number') m.metalness = payload.metalness;
+            if (typeof m.roughness === 'number') m.roughness = payload.roughness;
+            if (m.emissive) m.emissive.set(payload.emissiveHex || '#000000');
+            if (typeof m.emissiveIntensity === 'number') m.emissiveIntensity = payload.emissiveIntensity;
+            if (typeof m.bumpScale === 'number') m.bumpScale = payload.bumpScale;
+            if (generatedMaps) {
+              m.map = generatedMaps.map;
+              m.bumpMap = generatedMaps.bump;
+              m.bumpScale = Math.max(0.03, payload.bumpScale);
+            } else if (payload.proceduralPattern === 'none') {
+              m.map = null;
+              m.bumpMap = null;
+            }
+            m.needsUpdate = true;
+          });
+        };
+
+        const applyPrev = () => {
+          for (const prev of prevStates) {
+            if (prev.mat.color) prev.mat.color.copy(prev.color);
+            if (typeof prev.mat.metalness === 'number') prev.mat.metalness = prev.metalness;
+            if (typeof prev.mat.roughness === 'number') prev.mat.roughness = prev.roughness;
+            if (prev.mat.emissive) prev.mat.emissive.copy(prev.emissive);
+            if (typeof prev.mat.emissiveIntensity === 'number')
+              prev.mat.emissiveIntensity = prev.emissiveIntensity;
+            if (typeof prev.mat.bumpScale === 'number') prev.mat.bumpScale = prev.bumpScale;
+            prev.mat.map = prev.map;
+            prev.mat.bumpMap = prev.bumpMap;
+            prev.mat.needsUpdate = true;
+          }
+        };
+
+        applyNext();
+        recordUndoCommand('Edit PBR Material', applyPrev, applyNext);
+        applyVisualMaterials();
+        inspectActiveModel(captionModelName);
+        requestRender();
+        onNotify(`Updated ${targetMats.size} PBR material${targetMats.size > 1 ? 's' : ''}`);
+      },
+      [
+        applyVisualMaterials,
+        captionModelName,
+        inspectActiveModel,
+        onNotify,
+        recordUndoCommand,
+        requestRender,
+      ]
+    );
+
+    // Build dynamic rigid bodies list for Gravity / Physics Simulation
+    const initDynamicRigidBodies = useCallback((root: THREE.Object3D): RigidBodyState[] => {
+      const list: RigidBodyState[] = [];
+      const box = new THREE.Box3();
+      const size = new THREE.Vector3();
+      root.updateMatrixWorld(true);
+
+      for (const child of root.children) {
+        if (
+          !child.visible ||
+          child.userData?.isEditorHelper ||
+          child.userData?.isPlayModeAvatar ||
+          child.userData?.studioElementType === 'light' ||
+          child.userData?.studioElementType === 'camera' ||
+          child.userData?.isTerrain ||
+          child.userData?.isStaticCollider ||
+          child.userData?.noCollision
+        ) {
+          continue;
+        }
+        const lower = (child.name || '').toLowerCase();
+        if (
+          lower.includes('terrain') ||
+          lower.includes('ground') ||
+          lower.includes('cliff') ||
+          lower.includes('island') ||
+          lower.includes('pillar') ||
+          lower.includes('spire') ||
+          lower.includes('citadel') ||
+          lower.includes('sphere') ||
+          lower.includes('cloud') ||
+          lower.includes('water') ||
+          lower.includes('bridge') ||
+          lower.startsWith('ucx_')
+        ) {
+          continue;
+        }
+        box.setFromObject(child);
+        if (box.isEmpty()) continue;
+        box.getSize(size);
+        if (size.x < 0.05 || size.y < 0.05 || size.z < 0.05) continue;
+
+        list.push({
+          uuid: child.uuid,
+          position: { x: child.position.x, y: child.position.y, z: child.position.z },
+          velocity: { x: 0, y: 0, z: 0 },
+          halfExtents: { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 },
+          bottomOffset: Math.max(0.02, child.position.y - box.min.y),
+          isStatic: false,
+          sleeping: false,
+        });
+      }
+      return list;
+    }, []);
+
+    // Unity/Unreal-Style Temporary Play Mode (Exact Pre-Play Snapshot & Restore + Animated GLB Player)
+    const handlePlayVirtualKey = useCallback(
+      (key: string, pressed: boolean) => {
+        const norm = key.toLowerCase();
+        if (pressed) {
+          playKeysRef.current.add(norm);
+        } else {
+          playKeysRef.current.delete(norm);
+        }
+        requestRender();
+      },
+      [requestRender]
+    );
+
+    const disposePlayAvatar = useCallback((scene: THREE.Scene | null) => {
+      if (playerMixerRef.current) {
+        playerMixerRef.current.stopAllAction();
+        playerMixerRef.current = null;
+      }
+      playerActionsRef.current = {};
+      if (scene && playerAvatarRef.current) {
+        scene.remove(playerAvatarRef.current);
+        playerAvatarRef.current.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) {
+            (o as THREE.Mesh).geometry.dispose();
+            const m = (o as THREE.Mesh).material;
+            if (Array.isArray(m)) m.forEach((x) => x.dispose());
+            else if (m) m.dispose();
+          }
+        });
+        playerAvatarRef.current = null;
+      }
+    }, []);
+
+    const startPlayMode = useCallback(() => {
+      const scene = sceneRef.current;
+      const root = activeModelRootRef.current;
+      const cam = perspCamRef.current;
+      const orbit = orbitRef.current;
+      if (!scene || !cam || !orbit) return;
+      if (playModeActiveRef.current) return;
+
+      const sessionId = ++playSessionIdRef.current;
+
+      // Exit Scene Camera look-through if active
+      if (lookingThroughCamRef.current) {
+        lookingThroughCamRef.current = false;
+        setLookingThroughCam(false);
+      }
+
+      // Snapshot exact scene & editor camera state before Play Mode modifies anything
+      if (root) {
+        prePlaySnapshotRef.current = captureSceneTransformSnapshot(root);
+      } else {
+        prePlaySnapshotRef.current = null;
+      }
+      prePlayCamRef.current = {
+        pos: cam.position.clone(),
+        target: orbit.target.clone(),
+        wasOrtho: activeCamRef.current === orthoCamRef.current,
+      };
+
+      // Switch to perspective camera for gameplay
+      activeCamRef.current = cam;
+      setIsOrtho(false);
+      orbit.enabled = false;
+      transformCtrlRef.current?.detach();
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+      if (brushCursorRef.current) brushCursorRef.current.visible = false;
+
+      // Hide any scenic traveler stand-in while the real playable character is active
+      hiddenTravelersRef.current = [];
+      if (root) {
+        root.traverse((o) => {
+          if (o.userData?.isScenicTraveler && o.visible) {
+            o.visible = false;
+            hiddenTravelersRef.current.push(o);
+          }
+        });
+      }
+
+      // Collect colliders, walkable meshes (for exact raycast grounding), and terrains
+      const colliders = root ? collectWorldColliders(root) : [];
+      playCollidersRef.current = colliders;
+      const walkableMeshes = root ? collectWalkableMeshes(root) : [];
+      playWalkableMeshesRef.current = walkableMeshes;
+
+      const terrains: THREE.Mesh[] = [];
+      if (root) {
+        root.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh && o.userData?.isTerrain) {
+            terrains.push(o as THREE.Mesh);
+          }
+        });
+      }
+      playTerrainMeshesRef.current = terrains;
+      physicsBodiesRef.current = root ? initDynamicRigidBodies(root) : [];
+
+      const sampleSurfaceAtSpawn = (x: number, z: number, fromY: number): number | null => {
+        if (walkableMeshes.length === 0) return null;
+        const ray = playRaycasterRef.current;
+        playRayOriginRef.current.set(x, fromY, z);
+        ray.set(playRayOriginRef.current, playRayDownRef.current);
+        ray.near = 0.05;
+        ray.far = 16;
+        const hits = ray.intersectObjects(walkableMeshes, false);
+        return hits.length > 0 ? hits[0].point.y : null;
+      };
+
+      const recommended = root?.userData?.recommendedSpawn as
+        | { x: number; y: number; z: number }
+        | undefined;
+      const safeSpawn = findSafePlayerSpawn(
+        colliders,
+        recommended ?? { x: 0, y: 0.1, z: 2.6 },
+        sampleSurfaceAtSpawn
+      );
+      const pState = createPlayerState({ ...safeSpawn, yaw: 0 });
+      pState.facingYaw = Math.PI;
+      pState.pitch = 0.06;
+      playerStateRef.current = pState;
+
+      // Mount instant procedural avatar while async animated GLB character loads
+      disposePlayAvatar(scene);
+      const fallbackAvatar = createPlayerAvatarMesh();
+      animatePlayerAvatar(fallbackAvatar, pState);
+      fallbackAvatar.visible = playCamModeRef.current === 'third-person';
+      scene.add(fallbackAvatar);
+      playerAvatarRef.current = fallbackAvatar;
+      playerAvatarSourceRef.current = 'procedural';
+
+      // Asynchronously swap in the bundled free MIT-licensed rigged/animated 3D character GLB
+      const gltfLoader = new GLTFLoader();
+      gltfLoader
+        .loadAsync('/models/player-character.glb')
+        .then((gltf) => {
+          if (!playModeActiveRef.current || playSessionIdRef.current !== sessionId || !sceneRef.current) {
+            return;
+          }
+          const wrapper = new THREE.Group();
+          wrapper.name = 'PlayMode_GLB_Player';
+          wrapper.userData.isPlayModeAvatar = true;
+          wrapper.userData.isGlbPlayerCharacter = true;
+          wrapper.userData.isEditorHelper = true;
+          wrapper.userData.noCollision = true;
+
+          const model = gltf.scene;
+          model.updateMatrixWorld(true);
+          const rawBox = new THREE.Box3().setFromObject(model);
+          const rawSize = new THREE.Vector3();
+          const rawCenter = new THREE.Vector3();
+          rawBox.getSize(rawSize);
+          rawBox.getCenter(rawCenter);
+          const targetHeight = 1.72;
+          const scale = rawSize.y > 0.01 ? targetHeight / rawSize.y : 1;
+          model.scale.setScalar(scale);
+          // Rotate Soldier.glb (natively facing -Z) by PI so forward matches wrapper +Z
+          model.rotation.y = Math.PI;
+          model.updateMatrixWorld(true);
+          const scaledBox = new THREE.Box3().setFromObject(model);
+          const scaledCenter = new THREE.Vector3();
+          scaledBox.getCenter(scaledCenter);
+          model.position.x -= scaledCenter.x;
+          model.position.z -= scaledCenter.z;
+          model.position.y -= scaledBox.min.y;
+
+          model.traverse((child) => {
+            child.userData.isPlayModeAvatar = true;
+            child.userData.isEditorHelper = true;
+            child.userData.noCollision = true;
+            if ((child as THREE.Mesh).isMesh) {
+              const m = child as THREE.Mesh;
+              m.castShadow = !isSoftwareGlRef.current && propsRef.current.shadowsEnabled;
+              m.receiveShadow = !isSoftwareGlRef.current && propsRef.current.shadowsEnabled;
+            }
+          });
+
+          // Ground contact shadow disc beneath feet
+          const shadowDisc = new THREE.Mesh(
+            new THREE.CircleGeometry(0.42, 20),
+            new THREE.MeshBasicMaterial({
+              color: '#0A192A',
+              transparent: true,
+              opacity: 0.34,
+              depthWrite: false,
+            })
+          );
+          shadowDisc.rotation.x = -Math.PI / 2;
+          shadowDisc.position.y = 0.015;
+          shadowDisc.userData.isEditorHelper = true;
+
+          wrapper.add(model, shadowDisc);
+
+          // Set up AnimationMixer with Idle, Walk, and Run clips
+          const mixer = new THREE.AnimationMixer(model);
+          const findClip = (needle: string) =>
+            gltf.animations.find((c) => c.name.toLowerCase().includes(needle));
+          const idleClip = findClip('idle') || gltf.animations[0];
+          const walkClip = findClip('walk') || gltf.animations[1] || idleClip;
+          const runClip = findClip('run') || walkClip || idleClip;
+
+          const idleAction = idleClip ? mixer.clipAction(idleClip) : undefined;
+          const walkAction = walkClip ? mixer.clipAction(walkClip) : undefined;
+          const runAction = runClip ? mixer.clipAction(runClip) : undefined;
+
+          if (idleAction) {
+            idleAction.play();
+          }
+
+          // Replace temporary fallback avatar seamlessly
+          disposePlayAvatar(sceneRef.current);
+          playerMixerRef.current = mixer;
+          playerActionsRef.current = {
+            idle: idleAction,
+            walk: walkAction,
+            run: runAction,
+            current: 'idle',
+          };
+          playerAvatarRef.current = wrapper;
+          playerAvatarSourceRef.current = 'glb';
+          if (playerStateRef.current) {
+            animatePlayerAvatar(wrapper, playerStateRef.current);
+          }
+          wrapper.visible = playCamModeRef.current === 'third-person';
+          sceneRef.current.add(wrapper);
+          requestRender();
+        })
+        .catch(() => {
+          // Keep procedural explorer avatar seamlessly if GLB fails to load
+        });
+
+      playKeysRef.current.clear();
+      playModeActiveRef.current = true;
+      const nextStatus: PlayModeStatus = {
+        active: true,
+        cameraMode: playCamModeRef.current,
+        playerX: pState.x,
+        playerY: pState.y,
+        playerZ: pState.z,
+        grounded: pState.grounded,
+        sprinting: false,
+        flying: !propsRef.current.physicsConfig.gravityEnabled,
+        avatarSource: playerAvatarSourceRef.current,
+      };
+      setPlayModeStatus(nextStatus);
+      onPlayModeChange?.(nextStatus);
+      onNotify('Play Mode Active — WASD / Touch Keys · Space Jump/Fly · Drag to Look');
+      requestRender();
+    }, [disposePlayAvatar, initDynamicRigidBodies, onNotify, onPlayModeChange, requestRender]);
+
+    const stopPlayMode = useCallback(() => {
+      if (!playModeActiveRef.current) return;
+      const scene = sceneRef.current;
+      const root = activeModelRootRef.current;
+      const cam = perspCamRef.current;
+      const orbit = orbitRef.current;
+
+      playSessionIdRef.current++;
+      playModeActiveRef.current = false;
+      playKeysRef.current.clear();
+      playLookDragRef.current = { active: false, pointerId: null, lastX: 0, lastY: 0 };
+
+      // Remove & dispose temporary player avatar & AnimationMixer
+      disposePlayAvatar(scene);
+      playerAvatarSourceRef.current = 'procedural';
+
+      // Restore any hidden scenic traveler stand-ins
+      for (const obj of hiddenTravelersRef.current) {
+        obj.visible = true;
+      }
+      hiddenTravelersRef.current = [];
+      playWalkableMeshesRef.current = [];
+
+      // Restore exact pre-play scene state
+      if (root && prePlaySnapshotRef.current) {
+        restoreSceneTransformSnapshot(root, prePlaySnapshotRef.current);
+        prePlaySnapshotRef.current = null;
+      }
+
+      // Restore exact pre-play editor camera
+      if (cam && orbit && prePlayCamRef.current) {
+        cam.position.copy(prePlayCamRef.current.pos);
+        orbit.target.copy(prePlayCamRef.current.target);
+        if (prePlayCamRef.current.wasOrtho && orthoCamRef.current) {
+          orthoCamRef.current.position.copy(prePlayCamRef.current.pos);
+          activeCamRef.current = orthoCamRef.current;
+          orbit.object = orthoCamRef.current;
+          setIsOrtho(true);
+        } else {
+          activeCamRef.current = cam;
+          orbit.object = cam;
+          setIsOrtho(false);
+        }
+        orbit.enabled = true;
+        orbit.update();
+        prePlayCamRef.current = null;
+      } else if (orbit) {
+        orbit.enabled = true;
+      }
+
+      if (selectionBoxRef.current) selectionBoxRef.current.visible = true;
+      syncTransformGizmo();
+      updateSelectionBox();
+      inspectActiveModel(captionModelName);
+
+      const nextStatus: PlayModeStatus = {
+        active: false,
+        cameraMode: playCamModeRef.current,
+        playerX: 0,
+        playerY: 0,
+        playerZ: 0,
+        grounded: true,
+        sprinting: false,
+        flying: false,
+        avatarSource: 'procedural',
+      };
+      setPlayModeStatus(nextStatus);
+      onPlayModeChange?.(nextStatus);
+      onNotify('Stopped Play Mode — exact pre-play scene restored');
+      requestRender();
+    }, [
+      captionModelName,
+      disposePlayAvatar,
+      inspectActiveModel,
+      onNotify,
+      onPlayModeChange,
+      requestRender,
+      syncTransformGizmo,
+      updateSelectionBox,
+    ]);
+
+    const togglePlayMode = useCallback(() => {
+      if (playModeActiveRef.current) stopPlayMode();
+      else startPlayMode();
+    }, [startPlayMode, stopPlayMode]);
+
+    const togglePlayCameraMode = useCallback(() => {
+      const next = playCamModeRef.current === 'third-person' ? 'first-person' : 'third-person';
+      playCamModeRef.current = next;
+      if (playerAvatarRef.current) {
+        playerAvatarRef.current.visible = next === 'third-person';
+      }
+      setPlayModeStatus((prev) => ({ ...prev, cameraMode: next }));
+      requestRender();
+    }, [requestRender]);
+
+    const resetPhysicsState = useCallback(() => {
+      const root = activeModelRootRef.current;
+      if (!root) return;
+      if (preLivePhysicsSnapshotRef.current) {
+        restoreSceneTransformSnapshot(root, preLivePhysicsSnapshotRef.current);
+        preLivePhysicsSnapshotRef.current = null;
+      }
+      physicsBodiesRef.current = initDynamicRigidBodies(root);
+      updateSelectionBox();
+      inspectActiveModel(captionModelName);
+      requestRender();
+      onNotify('Restored pre-physics object transforms');
+    }, [
+      captionModelName,
+      initDynamicRigidBodies,
+      inspectActiveModel,
+      onNotify,
+      requestRender,
+      updateSelectionBox,
+    ]);
 
     // Expose imperative methods to App
     useImperativeHandle(
@@ -2453,6 +3844,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         },
         clearToPointCloud,
         setCameraPreset,
+        focusSelected,
         toggleOrtho,
         zoomBy,
         resetView,
@@ -2461,6 +3853,25 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         captureMultiAngleScreenshots,
         getActiveModelRoot: () => activeModelRootRef.current,
         selectNode,
+        groupSelectedNode,
+        unparentNode,
+        reparentNode,
+        undo,
+        redo,
+        startPlayMode,
+        stopPlayMode,
+        togglePlayMode,
+        togglePlayCameraMode,
+        setPlayInputKey: handlePlayVirtualKey,
+        resetPhysicsState,
+        setViewportToolMode: (mode: ViewportToolMode) => {
+          setToolMode(mode);
+          if (mode !== 'terrain-sculpt' && mode !== 'terrain-paint' && mode !== 'scatter-brush') {
+            if (brushCursorRef.current) brushCursorRef.current.visible = false;
+          }
+          requestRender();
+        },
+        editMaterial,
         updateLightProperties,
         updateCameraProperties,
         setActiveSceneCamera,
@@ -2532,6 +3943,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             onNotify(`${target.name || 'Node'} is locked`);
             return;
           }
+          const prevPos = target.position.clone();
+          const prevRot = target.rotation.clone();
+          const prevScale = target.scale.clone();
+
           if (axis === 'posX') target.position.x = value;
           if (axis === 'posY') target.position.y = value;
           if (axis === 'posZ') target.position.z = value;
@@ -2542,7 +3957,28 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           if (axis === 'scaleY') target.scale.y = value;
           if (axis === 'scaleZ') target.scale.z = value;
           target.updateMatrixWorld(true);
+
+          const nextPos = target.position.clone();
+          const nextRot = target.rotation.clone();
+          const nextScale = target.scale.clone();
+          recordUndoCommand(
+            `Transform ${target.name} (${axis})`,
+            () => {
+              target.position.copy(prevPos);
+              target.rotation.copy(prevRot);
+              target.scale.copy(prevScale);
+              target.updateMatrixWorld(true);
+            },
+            () => {
+              target.position.copy(nextPos);
+              target.rotation.copy(nextRot);
+              target.scale.copy(nextScale);
+              target.updateMatrixWorld(true);
+            }
+          );
+
           updateSelectionBox();
+          syncViewportOverlays();
           applyVisualMaterials();
           inspectActiveModel(captionModelName);
         },
@@ -2670,6 +4106,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         clearToPointCloud,
         deleteSelected,
         duplicateSelected,
+        editMaterial,
+        focusSelected,
+        groupSelectedNode,
         inspectActiveModel,
         loadModelFromUrl,
         loadStarterLantern,
@@ -2679,16 +4118,28 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         onAnimationsChange,
         onNotify,
         onSoloNodeChange,
+        recordUndoCommand,
+        redo,
+        reparentNode,
         requestRender,
+        resetPhysicsState,
         resetView,
         selectNode,
         setActiveSceneCamera,
         setCameraPreset,
+        setToolMode,
         snapSelectedToGround,
+        startPlayMode,
+        stopPlayMode,
         syncTransformGizmo,
+        syncViewportOverlays,
         toggleLookThroughCamera,
         toggleOrtho,
+        togglePlayCameraMode,
+        togglePlayMode,
         toggleSelectedFlatShading,
+        undo,
+        unparentNode,
         updateCameraProperties,
         updateLightProperties,
         updateSelectionBox,
@@ -2746,35 +4197,62 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       hemiLightRef.current = hemi;
 
       const key = new THREE.DirectionalLight('#FFF4E4', 2.6);
-      key.position.set(3.8, 5.2, 3.8);
+      key.position.set(8, 12, 8);
       if (!isSw) {
-        key.castShadow = true;
+        key.castShadow = propsRef.current.shadowsEnabled;
         key.shadow.mapSize.set(2048, 2048);
         key.shadow.bias = -0.0004;
         key.shadow.camera.near = 0.5;
-        key.shadow.camera.far = 22;
-        key.shadow.camera.left = -5;
-        key.shadow.camera.right = 5;
-        key.shadow.camera.top = 5;
-        key.shadow.camera.bottom = -5;
+        key.shadow.camera.far = 90;
+        key.shadow.camera.left = -26;
+        key.shadow.camera.right = 26;
+        key.shadow.camera.top = 26;
+        key.shadow.camera.bottom = -26;
       }
       scene.add(key);
       keyLightRef.current = key;
 
       const fill = new THREE.DirectionalLight('#DCE7F0', 0.85);
-      fill.position.set(-4.2, 3.0, 2.4);
+      fill.position.set(-8, 6, 5);
       scene.add(fill);
       fillLightRef.current = fill;
 
       const rim = new THREE.DirectionalLight('#EDF4F1', 1.05);
-      rim.position.set(-3.2, 3.6, -3.5);
+      rim.position.set(-6, 8, -7);
       scene.add(rim);
       rimLightRef.current = rim;
 
       const floorGrid = createInfiniteFloorGrid();
-      floorGrid.visible = propsRef.current.showGrid;
+      floorGrid.visible = propsRef.current.showGrid && propsRef.current.overlays.showGrid;
       scene.add(floorGrid);
       gridRef.current = floorGrid;
+
+      const axesHelper = new THREE.AxesHelper(6);
+      axesHelper.name = 'World_Axes_Helper';
+      axesHelper.userData.isEditorHelper = true;
+      axesHelper.visible = propsRef.current.overlays.showAxes;
+      scene.add(axesHelper);
+      axesHelperRef.current = axesHelper;
+
+      const skyDome = createProceduralSkyDome();
+      scene.add(skyDome);
+      skyDomeRef.current = skyDome;
+
+      const brushPts: THREE.Vector3[] = [];
+      for (let i = 0; i < 36; i++) {
+        const a = (i / 36) * Math.PI * 2;
+        brushPts.push(new THREE.Vector3(Math.cos(a), 0.04, Math.sin(a)));
+      }
+      const brushCursor = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(brushPts),
+        new THREE.LineBasicMaterial({ color: '#2D5A4C', depthTest: false })
+      );
+      brushCursor.name = 'Terrain_Brush_Cursor';
+      brushCursor.visible = false;
+      brushCursor.renderOrder = 20;
+      brushCursor.userData.isEditorHelper = true;
+      scene.add(brushCursor);
+      brushCursorRef.current = brushCursor;
 
       const shadowTex = createContactShadowTexture();
       const contactShadow = new THREE.Mesh(
@@ -2814,21 +4292,24 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       pointCloudRef.current = ptArt;
 
       const aspect = container.clientWidth / Math.max(1, container.clientHeight);
-      const persp = new THREE.PerspectiveCamera(42, aspect, 0.05, 140);
+      const persp = new THREE.PerspectiveCamera(propsRef.current.cameraFov || 42, aspect, 0.05, 2000);
       persp.position.set(1.85, 1.35, 2.1);
       perspCamRef.current = persp;
 
-      const ortho = new THREE.OrthographicCamera(-2 * aspect, 2 * aspect, 2, -2, 0.05, 140);
+      const ortho = new THREE.OrthographicCamera(-2 * aspect, 2 * aspect, 2, -2, 0.05, 2000);
       ortho.position.copy(persp.position);
       orthoCamRef.current = ortho;
       activeCamRef.current = persp;
 
+      // Unbounded 3D space: full spherical orbit including below grid (Y < 0) and open-world distances
       const orbit = new OrbitControls(persp, renderer.domElement);
       orbit.enableDamping = !isSw;
       orbit.dampingFactor = 0.08;
-      orbit.maxPolarAngle = Math.PI * 0.495;
-      orbit.minDistance = 0.55;
-      orbit.maxDistance = 32;
+      orbit.maxPolarAngle = Math.PI;
+      orbit.minPolarAngle = 0.01;
+      orbit.minDistance = 0.2;
+      orbit.maxDistance = 600;
+      orbit.screenSpacePanning = true;
       orbit.target.set(0, 0.68, 0);
       orbit.update();
       orbitRef.current = orbit;
@@ -2841,7 +4322,45 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       transformHelperRef.current = tcHelper;
 
       const onTcDragging = (ev: { value: unknown }) => {
-        orbit.enabled = !ev.value;
+        const dragging = Boolean(ev.value);
+        orbit.enabled = !dragging && !playModeActiveRef.current;
+        const target = tc.object;
+        if (dragging && target) {
+          tcDragStartRef.current = {
+            uuid: target.uuid,
+            pos: target.position.clone(),
+            quat: target.quaternion.clone(),
+            scale: target.scale.clone(),
+          };
+        } else if (!dragging && target && tcDragStartRef.current && tcDragStartRef.current.uuid === target.uuid) {
+          const prev = tcDragStartRef.current;
+          tcDragStartRef.current = null;
+          const moved =
+            prev.pos.distanceTo(target.position) > 0.0005 ||
+            prev.quat.angleTo(target.quaternion) > 0.0005 ||
+            prev.scale.distanceTo(target.scale) > 0.0005;
+          if (moved) {
+            const nextPos = target.position.clone();
+            const nextQuat = target.quaternion.clone();
+            const nextScale = target.scale.clone();
+            recordUndoCommand(
+              `Gizmo ${target.name || 'Node'}`,
+              () => {
+                target.position.copy(prev.pos);
+                target.quaternion.copy(prev.quat);
+                target.scale.copy(prev.scale);
+                target.updateMatrixWorld(true);
+              },
+              () => {
+                target.position.copy(nextPos);
+                target.quaternion.copy(nextQuat);
+                target.scale.copy(nextScale);
+                target.updateMatrixWorld(true);
+              }
+            );
+          }
+          syncViewportOverlays();
+        }
         requestRender();
       };
       const onTcObjectChange = () => {
@@ -2876,8 +4395,10 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       };
       orbit.addEventListener('change', onOrbitChange);
 
-      // Auto-load single curated sample model immediately on mount
-      loadStarterLantern(true);
+      // Auto-load featured open-source rigged character from repository on mount
+      void loadModelFromUrl('/models/michelle.glb', 'Michelle', '.glb').catch(() => {
+        clearToPointCloud();
+      });
       applyLighting();
 
       const handleResize = () => {
@@ -2900,9 +4421,6 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         orthoCamRef.current.left = -halfH * asp;
         orthoCamRef.current.right = halfH * asp;
         orthoCamRef.current.updateProjectionMatrix();
-        if (activeModelRootRef.current) {
-          frameModel(activeModelRootRef.current, true);
-        }
         rendererRef.current.setScissorTest(false);
         rendererRef.current.setViewport(0, 0, w, h);
         rendererRef.current.render(sceneRef.current, activeCamRef.current);
@@ -2975,11 +4493,19 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       renderer.render(scene, persp);
       drawCompass(persp);
 
-      const afterDraw = (cb: FrameRequestCallback) => {
-        if (!isSw) {
-          rafIdRef.current = requestAnimationFrame(cb);
+      let loopScheduled = false;
+
+      const scheduleNext = (cb: (ts: number) => void, afterGpuDraw: boolean) => {
+        if (disposed || loopScheduled) return;
+        loopScheduled = true;
+        if (!afterGpuDraw || !isSw) {
+          rafIdRef.current = requestAnimationFrame((ts) => {
+            loopScheduled = false;
+            cb(ts);
+          });
           return;
         }
+        // Software WebGL throttle: yield to main thread cleanly so automation & UI stay responsive
         const gl2 = gl as WebGL2RenderingContext;
         if (typeof gl2.fenceSync === 'function') {
           const sync = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -2992,26 +4518,34 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
               }
               const status = gl2.clientWaitSync(sync, 0, 0);
               if (status === gl2.TIMEOUT_EXPIRED) {
-                rafIdRef.current = requestAnimationFrame(poll);
+                timerIdRef.current = window.setTimeout(poll, 5);
               } else {
                 gl2.deleteSync(sync);
-                rafIdRef.current = requestAnimationFrame(cb);
+                timerIdRef.current = window.setTimeout(() => {
+                  loopScheduled = false;
+                  cb(performance.now());
+                }, 60);
               }
             };
-            rafIdRef.current = requestAnimationFrame(poll);
+            timerIdRef.current = window.setTimeout(poll, 5);
             return;
           }
         }
-        rafIdRef.current = requestAnimationFrame(cb);
+        timerIdRef.current = window.setTimeout(() => {
+          loopScheduled = false;
+          cb(performance.now());
+        }, 60);
       };
 
-      const quadFront = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
-      const quadTop = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
-      const quadRight = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 80);
+      const quadFront = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 800);
+      const quadTop = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 800);
+      const quadRight = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.05, 800);
 
       let disposed = false;
       let lastTime = performance.now();
       let lastTelemetryPush = 0;
+      let lastHudPush = 0;
+      fpsAccumRef.current = { frames: 0, lastStamp: performance.now(), fps: 60 };
 
       const tick = (now: number) => {
         if (disposed) return;
@@ -3029,7 +4563,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           continuous = true;
         }
 
-        if (curProps.autoSpin && activeModelRootRef.current) {
+        if (curProps.autoSpin && activeModelRootRef.current && !playModeActiveRef.current) {
           activeModelRootRef.current.rotation.y += dt * 0.45;
           continuous = true;
         }
@@ -3058,26 +4592,196 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           needsRenderRef.current = true;
         }
 
-        if (pendingCamTargetPosRef.current && pendingOrbitTargetRef.current && cam && ctrl) {
-          cam.position.x = THREE.MathUtils.damp(cam.position.x, pendingCamTargetPosRef.current.x, 9, dt);
-          cam.position.y = THREE.MathUtils.damp(cam.position.y, pendingCamTargetPosRef.current.y, 9, dt);
-          cam.position.z = THREE.MathUtils.damp(cam.position.z, pendingCamTargetPosRef.current.z, 9, dt);
-          ctrl.target.x = THREE.MathUtils.damp(ctrl.target.x, pendingOrbitTargetRef.current.x, 9, dt);
-          ctrl.target.y = THREE.MathUtils.damp(ctrl.target.y, pendingOrbitTargetRef.current.y, 9, dt);
-          ctrl.target.z = THREE.MathUtils.damp(ctrl.target.z, pendingOrbitTargetRef.current.z, 9, dt);
-          ctrl.update();
-          if (
-            cam.position.distanceTo(pendingCamTargetPosRef.current) < 0.015 &&
-            ctrl.target.distanceTo(pendingOrbitTargetRef.current) < 0.015
-          ) {
+        if (
+          !playModeActiveRef.current &&
+          pendingCamTargetPosRef.current &&
+          pendingOrbitTargetRef.current &&
+          cam &&
+          ctrl
+        ) {
+          if (isSw || reducedMotionRef.current) {
             cam.position.copy(pendingCamTargetPosRef.current);
             ctrl.target.copy(pendingOrbitTargetRef.current);
             pendingCamTargetPosRef.current = null;
             pendingOrbitTargetRef.current = null;
+            ctrl.update();
           } else {
-            continuous = true;
+            cam.position.x = THREE.MathUtils.damp(cam.position.x, pendingCamTargetPosRef.current.x, 9, dt);
+            cam.position.y = THREE.MathUtils.damp(cam.position.y, pendingCamTargetPosRef.current.y, 9, dt);
+            cam.position.z = THREE.MathUtils.damp(cam.position.z, pendingCamTargetPosRef.current.z, 9, dt);
+            ctrl.target.x = THREE.MathUtils.damp(ctrl.target.x, pendingOrbitTargetRef.current.x, 9, dt);
+            ctrl.target.y = THREE.MathUtils.damp(ctrl.target.y, pendingOrbitTargetRef.current.y, 9, dt);
+            ctrl.target.z = THREE.MathUtils.damp(ctrl.target.z, pendingOrbitTargetRef.current.z, 9, dt);
+            ctrl.update();
+            if (
+              cam.position.distanceTo(pendingCamTargetPosRef.current) < 0.015 &&
+              ctrl.target.distanceTo(pendingOrbitTargetRef.current) < 0.015
+            ) {
+              cam.position.copy(pendingCamTargetPosRef.current);
+              ctrl.target.copy(pendingOrbitTargetRef.current);
+              pendingCamTargetPosRef.current = null;
+              pendingOrbitTargetRef.current = null;
+            } else {
+              continuous = true;
+            }
           }
           needsRenderRef.current = true;
+        }
+
+        // Play Mode character controller, animated GLB mixer, mesh-surface grounding & follow camera
+        if (playModeActiveRef.current && playerStateRef.current && perspCamRef.current) {
+          const keys = playKeysRef.current;
+          const forward =
+            (keys.has('w') || keys.has('arrowup') ? 1 : 0) -
+            (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+          const right =
+            (keys.has('d') || keys.has('arrowright') ? 1 : 0) -
+            (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+          const jump = keys.has(' ');
+          const sprint = keys.has('shift');
+          const descend = keys.has('c') || keys.has('control');
+
+          const terrainSampler = (x: number, z: number): number | null => {
+            let bestY: number | null = null;
+            for (const tm of playTerrainMeshesRef.current) {
+              const h = sampleTerrainHeightAt(tm, x, z);
+              if (h !== null && (bestY === null || h > bestY)) {
+                bestY = h;
+              }
+            }
+            return bestY;
+          };
+
+          const surfaceSampler = (x: number, z: number, fromY: number): number | null => {
+            const meshes = playWalkableMeshesRef.current;
+            if (meshes.length === 0) return null;
+            const ray = playRaycasterRef.current;
+            playRayOriginRef.current.set(x, fromY, z);
+            ray.set(playRayOriginRef.current, playRayDownRef.current);
+            ray.near = 0.02;
+            ray.far = 14;
+            const hits = ray.intersectObjects(meshes, false);
+            return hits.length > 0 ? hits[0].point.y : null;
+          };
+
+          const phys = curProps.physicsConfig;
+
+          stepPlayerController(
+            playerStateRef.current,
+            { forward, right, jump, sprint, descend },
+            playCollidersRef.current,
+            dt,
+            {
+              gravityEnabled: phys.gravityEnabled,
+              gravityStrength: phys.gravityStrength,
+              floorY: null,
+              voidRespawnY: -20,
+              sampleTerrainY: terrainSampler,
+              sampleSurfaceY: surfaceSampler,
+            }
+          );
+
+          const st = playerStateRef.current;
+          if (st.respawnedThisStep) {
+            onNotify('Respawned on island overlook');
+          }
+
+          // Drive GLB skeletal character animations (Idle / Walk / Run cross-fade)
+          if (playerMixerRef.current) {
+            const horizSpeed = Math.hypot(st.vx, st.vz);
+            const targetAnim: 'idle' | 'walk' | 'run' =
+              horizSpeed > 5.4 ? 'run' : horizSpeed > 0.35 ? 'walk' : 'idle';
+            const actions = playerActionsRef.current;
+            if (actions.current !== targetAnim) {
+              const nextAction = actions[targetAnim] || actions.idle;
+              const prevAction = actions.current ? actions[actions.current] : undefined;
+              if (nextAction && nextAction !== prevAction) {
+                nextAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+                if (prevAction) {
+                  prevAction.crossFadeTo(nextAction, 0.18, true);
+                }
+              }
+              actions.current = targetAnim;
+            }
+            playerMixerRef.current.update(dt);
+          }
+
+          const avatar = playerAvatarRef.current;
+          if (avatar) {
+            avatar.visible = playCamModeRef.current === 'third-person';
+            animatePlayerAvatar(avatar, st);
+          }
+
+          const pCam = perspCamRef.current;
+          const eyeTarget = new THREE.Vector3(st.x, st.y + 1.48, st.z);
+          if (playCamModeRef.current === 'first-person') {
+            pCam.position.copy(eyeTarget);
+            const lookDir = new THREE.Vector3(
+              -Math.sin(st.yaw) * Math.cos(st.pitch),
+              Math.sin(st.pitch),
+              -Math.cos(st.yaw) * Math.cos(st.pitch)
+            );
+            pCam.lookAt(eyeTarget.clone().add(lookDir));
+          } else {
+            const camDist = 5.1;
+            const horiz = Math.cos(st.pitch) * camDist;
+            const camPos = new THREE.Vector3(
+              eyeTarget.x + Math.sin(st.yaw) * horiz,
+              eyeTarget.y - Math.sin(st.pitch) * camDist + 0.85,
+              eyeTarget.z + Math.cos(st.yaw) * horiz
+            );
+            const lookAhead = new THREE.Vector3(
+              eyeTarget.x - Math.sin(st.yaw) * 4.0,
+              eyeTarget.y + Math.sin(st.pitch) * 3.0 + 0.35,
+              eyeTarget.z - Math.cos(st.yaw) * 4.0
+            );
+            pCam.position.copy(camPos);
+            pCam.lookAt(lookAhead);
+          }
+
+          if (now - lastHudPush > 140) {
+            const nextStatus: PlayModeStatus = {
+              active: true,
+              cameraMode: playCamModeRef.current,
+              playerX: st.x,
+              playerY: st.y,
+              playerZ: st.z,
+              grounded: st.grounded,
+              sprinting: sprint && (forward !== 0 || right !== 0),
+              flying: !phys.gravityEnabled,
+              avatarSource: playerAvatarSourceRef.current,
+            };
+            setPlayModeStatus(nextStatus);
+            onPlayModeChange?.(nextStatus);
+          }
+
+          continuous = true;
+          needsRenderRef.current = true;
+        }
+
+        // Rigid-body gravity & stacking simulation (Play Mode or Live Editor Simulation)
+        if (
+          curProps.physicsConfig.gravityEnabled &&
+          (playModeActiveRef.current || curProps.physicsConfig.liveSimulation) &&
+          physicsBodiesRef.current.length > 0
+        ) {
+          stepRigidBodies(physicsBodiesRef.current, playCollidersRef.current, dt, {
+            gravity: curProps.physicsConfig.gravityStrength,
+            floorY: 0,
+            restitution: 0.22,
+          });
+          const root = activeModelRootRef.current;
+          if (root) {
+            for (const body of physicsBodiesRef.current) {
+              const obj = root.getObjectByProperty('uuid', body.uuid);
+              if (obj) {
+                obj.position.set(body.position.x, body.position.y, body.position.z);
+              }
+            }
+          }
+          if (selectionBoxRef.current) selectionBoxRef.current.update();
+          needsRenderRef.current = true;
+          continuous = true;
         }
 
         if (mixerRef.current && animPlayingRef.current && activeActionRef.current) {
@@ -3089,7 +4793,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           needsRenderRef.current = true;
         }
 
-        if (ctrl && ctrl.enableDamping) {
+        if (ctrl && ctrl.enableDamping && !playModeActiveRef.current) {
           const moved = ctrl.update();
           if (moved) needsRenderRef.current = true;
         }
@@ -3099,7 +4803,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           const w = container.clientWidth;
           const h = Math.max(1, container.clientHeight);
 
-          if (curProps.quadView) {
+          if (skyDomeRef.current) {
+            skyDomeRef.current.position.copy(cam.position);
+          }
+
+          if (curProps.quadView && !playModeActiveRef.current) {
             const hw = Math.floor(w / 2);
             const hh = Math.floor(h / 2);
             const qAsp = hw / Math.max(1, hh);
@@ -3112,7 +4820,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             quadTop.right = span * qAsp;
             quadTop.top = span;
             quadTop.bottom = -span;
-            quadTop.position.set(c.x, c.y + 8, c.z + 0.001);
+            quadTop.position.set(c.x, c.y + Math.max(8, span * 3), c.z + 0.001);
             quadTop.lookAt(c);
             quadTop.updateProjectionMatrix();
             renderer.setViewport(0, hh, hw, h - hh);
@@ -3127,7 +4835,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             quadFront.right = span * qAsp;
             quadFront.top = span;
             quadFront.bottom = -span;
-            quadFront.position.set(c.x, c.y, c.z + 8);
+            quadFront.position.set(c.x, c.y, c.z + Math.max(8, span * 3));
             quadFront.lookAt(c);
             quadFront.updateProjectionMatrix();
             renderer.setViewport(0, 0, hw, hh);
@@ -3138,7 +4846,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             quadRight.right = span * qAsp;
             quadRight.top = span;
             quadRight.bottom = -span;
-            quadRight.position.set(c.x + 8, c.y, c.z);
+            quadRight.position.set(c.x + Math.max(8, span * 3), c.y, c.z);
             quadRight.lookAt(c);
             quadRight.updateProjectionMatrix();
             renderer.setViewport(hw, 0, w - hw, hh);
@@ -3146,7 +4854,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             renderer.render(scene, quadRight);
 
             renderer.setScissorTest(false);
-          } else if (lookingThroughCamRef.current) {
+          } else if (lookingThroughCamRef.current && !playModeActiveRef.current) {
             const pair = getActiveSceneCameraPair();
             if (pair) {
               pair.group.updateMatrixWorld(true);
@@ -3170,8 +4878,24 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
           drawCompass(cam);
 
+          // FPS & HUD update
+          fpsAccumRef.current.frames += 1;
+          const elapsed = now - fpsAccumRef.current.lastStamp;
+          if (elapsed >= 500) {
+            const measuredFps = Math.min(144, Math.max(1, Math.round((fpsAccumRef.current.frames * 1000) / elapsed)));
+            fpsAccumRef.current.fps = measuredFps;
+            fpsAccumRef.current.frames = 0;
+            fpsAccumRef.current.lastStamp = now;
+            setHudState((prev) => ({
+              ...prev,
+              fps: measuredFps,
+              cursorPosition: cursorWorldRef.current,
+            }));
+          }
+
           if (now - lastTelemetryPush > 180) {
             lastTelemetryPush = now;
+            lastHudPush = now;
             const offset = cam.position.clone().sub(ctrl.target);
             const r = offset.length() || 1;
             const pitchDeg = Math.round(
@@ -3190,17 +4914,27 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             });
           }
 
-          afterDraw(tick);
-        } else {
-          rafIdRef.current = requestAnimationFrame(tick);
+          if (continuous || needsRenderRef.current) {
+            scheduleNext(tick, true);
+          }
+        } else if (continuous) {
+          scheduleNext(tick, false);
         }
       };
 
-      rafIdRef.current = requestAnimationFrame(tick);
+      wakeLoopRef.current = () => {
+        if (!disposed) {
+          scheduleNext(tick, false);
+        }
+      };
+
+      scheduleNext(tick, false);
 
       return () => {
         disposed = true;
+        wakeLoopRef.current = null;
         cancelAnimationFrame(rafIdRef.current);
+        window.clearTimeout(timerIdRef.current);
         resizeObserver.disconnect();
         tc.removeEventListener('dragging-changed', onTcDragging);
         tc.removeEventListener('objectChange', onTcObjectChange);
@@ -3209,9 +4943,17 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         orbit.removeEventListener('change', onOrbitChange);
         orbit.dispose();
         disposeCurrentModel();
+        tempOverrideMaterialsRef.current.forEach((m) => m.dispose());
+        tempOverrideMaterialsRef.current.clear();
         ptArt.dispose();
         floorGrid.geometry.dispose();
         (floorGrid.material as THREE.Material).dispose();
+        axesHelper.geometry.dispose();
+        (axesHelper.material as THREE.Material).dispose();
+        skyDome.geometry.dispose();
+        (skyDome.material as THREE.Material).dispose();
+        brushCursor.geometry.dispose();
+        (brushCursor.material as THREE.Material).dispose();
         contactShadow.geometry.dispose();
         (contactShadow.material as THREE.Material).dispose();
         shadowTex.dispose();
@@ -3231,11 +4973,24 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
     // React to visual prop changes
     useEffect(() => {
-      if (gridRef.current) {
-        gridRef.current.visible = showGrid;
+      syncViewportOverlays();
+    }, [showGrid, overlays, syncViewportOverlays]);
+
+    useEffect(() => {
+      if (perspCamRef.current) {
+        perspCamRef.current.fov = cameraFov;
+        perspCamRef.current.updateProjectionMatrix();
         requestRender();
       }
-    }, [showGrid, requestRender]);
+    }, [cameraFov, requestRender]);
+
+    useEffect(() => {
+      if (orbitRef.current) {
+        orbitRef.current.rotateSpeed = 0.85 * cameraSpeed;
+        orbitRef.current.zoomSpeed = 1.0 * cameraSpeed;
+        orbitRef.current.panSpeed = 0.85 * cameraSpeed;
+      }
+    }, [cameraSpeed]);
 
     useEffect(() => {
       if (skeletonHelperRef.current) {
@@ -3250,23 +5005,55 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
     useEffect(() => {
       applyLighting();
-    }, [lightingPreset, lightAngleDeg, applyLighting]);
+    }, [lightingPreset, lightAngleDeg, sunElevationDeg, shadowsEnabled, applyLighting]);
 
     useEffect(() => {
       syncTransformGizmo();
-    }, [gizmoMode, gizmoSpace, snapGrid, snapRotateDeg, syncTransformGizmo]);
+    }, [gizmoMode, gizmoSpace, snapGrid, snapRotateDeg, snapScale, syncTransformGizmo]);
 
     useEffect(() => {
-      updateWorldEnvironment(worldEnvPreset, worldFogDensity);
-    }, [worldEnvPreset, worldFogDensity, updateWorldEnvironment]);
+      updateWorldEnvironment(worldEnvPreset, worldFogDensity, worldFogHeight);
+    }, [worldEnvPreset, worldFogDensity, worldFogHeight, updateWorldEnvironment]);
 
     useEffect(() => {
       requestRender();
     }, [quadView, autoSpin, exploded, requestRender]);
 
+    // Live Editor Physics Simulation toggle (outside Play Mode)
+    useEffect(() => {
+      if (playModeActiveRef.current) return;
+      const root = activeModelRootRef.current;
+      if (physicsConfig.liveSimulation && physicsConfig.gravityEnabled && root) {
+        if (!preLivePhysicsSnapshotRef.current) {
+          preLivePhysicsSnapshotRef.current = captureSceneTransformSnapshot(root);
+        }
+        playCollidersRef.current = collectWorldColliders(root);
+        physicsBodiesRef.current = initDynamicRigidBodies(root);
+        requestRender();
+      } else if (preLivePhysicsSnapshotRef.current && root) {
+        restoreSceneTransformSnapshot(root, preLivePhysicsSnapshotRef.current);
+        preLivePhysicsSnapshotRef.current = null;
+        physicsBodiesRef.current = [];
+        updateSelectionBox();
+        inspectActiveModel(captionModelName);
+        requestRender();
+      }
+    }, [
+      physicsConfig.liveSimulation,
+      physicsConfig.gravityEnabled,
+      initDynamicRigidBodies,
+      updateSelectionBox,
+      inspectActiveModel,
+      captionModelName,
+      requestRender,
+    ]);
+
     useEffect(() => {
       const orbit = orbitRef.current;
       if (!orbit) return;
+      const isBrushTool =
+        toolMode === 'terrain-sculpt' || toolMode === 'terrain-paint' || toolMode === 'scatter-brush';
+      orbit.enabled = !playModeActiveRef.current && !isBrushTool;
       if (dragMode === 'pan') {
         orbit.mouseButtons.LEFT = THREE.MOUSE.PAN;
       } else if (dragMode === 'zoom') {
@@ -3274,9 +5061,13 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       } else {
         orbit.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
       }
-    }, [dragMode]);
+      if (!isBrushTool && brushCursorRef.current) {
+        brushCursorRef.current.visible = false;
+        requestRender();
+      }
+    }, [dragMode, toolMode, requestRender]);
 
-    // Keyboard shortcuts: Blender Numpad + Gizmos (G/R/S) + Shift+D Duplicate + Delete + WASD/QE + H
+    // Keyboard shortcuts: Undo/Redo + Play Mode + Focus (F) + Blender Numpad + Gizmos (G/R/S) + Shift+D + Delete + WASD/QE + H
     useEffect(() => {
       const onKeyDown = (e: KeyboardEvent) => {
         const tag = (e.target as HTMLElement | null)?.tagName;
@@ -3284,9 +5075,63 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
 
         const lower = e.key.toLowerCase();
 
+        // Undo / Redo (Ctrl+Z / Cmd+Z / Ctrl+Y / Cmd+Shift+Z)
+        if ((e.ctrlKey || e.metaKey) && lower === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          undo();
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && (lower === 'y' || (lower === 'z' && e.shiftKey))) {
+          e.preventDefault();
+          redo();
+          return;
+        }
+
+        // Play Mode keyboard handling
+        if (playModeActiveRef.current) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            stopPlayMode();
+            return;
+          }
+          if (lower === 'v') {
+            e.preventDefault();
+            togglePlayCameraMode();
+            return;
+          }
+          const normKey = e.code === 'Space' ? ' ' : lower;
+          if (
+            [
+              'w',
+              'a',
+              's',
+              'd',
+              ' ',
+              'shift',
+              'c',
+              'control',
+              'arrowup',
+              'arrowdown',
+              'arrowleft',
+              'arrowright',
+            ].includes(normKey)
+          ) {
+            if (normKey === ' ' || normKey.startsWith('arrow')) e.preventDefault();
+            playKeysRef.current.add(normKey);
+            requestRender();
+            return;
+          }
+          return;
+        }
+
         if (lower === 'h' && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
           setControlsHidden((prev) => !prev);
+          return;
+        }
+        if (lower === 'f' && !e.ctrlKey && !e.metaKey) {
+          e.preventDefault();
+          focusSelected();
           return;
         }
         if (lower === 'g' && !e.ctrlKey && !e.metaKey) {
@@ -3311,8 +5156,21 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
         if (lower === 's' && propsRef.current.gizmoMode !== 'none' && !e.ctrlKey && !e.metaKey) {
           e.preventDefault();
-          onGizmoModeChange('scale');
+          onGizmoModeChange(propsRef.current.gizmoMode === 'scale' ? 'none' : 'scale');
           return;
+        }
+        if (e.key === 'Escape') {
+          if (lookingThroughCamRef.current) {
+            e.preventDefault();
+            toggleLookThroughCamera();
+            return;
+          }
+          if (propsRef.current.toolMode !== 'orbit') {
+            setToolMode('orbit');
+            if (brushCursorRef.current) brushCursorRef.current.visible = false;
+            requestRender();
+            return;
+          }
         }
 
         if (e.code === 'Numpad1') {
@@ -3338,10 +5196,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           }
         } else if (e.code === 'NumpadDecimal') {
           e.preventDefault();
-          resetView();
-        } else if (e.key === 'Escape' && lookingThroughCamRef.current) {
-          e.preventDefault();
-          toggleLookThroughCamera();
+          focusSelected();
         } else if (
           e.code === 'Numpad4' ||
           e.code === 'Numpad6' ||
@@ -3374,7 +5229,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           const cam = activeCamRef.current;
           const orbit = orbitRef.current;
           if (!cam || !orbit) return;
-          const step = 0.16;
+          const step = Math.max(0.14, modelRadiusRef.current * 0.05) * (propsRef.current.cameraSpeed || 1);
           const forward = new THREE.Vector3();
           cam.getWorldDirection(forward);
           const right = new THREE.Vector3().crossVectors(forward, cam.up).normalize();
@@ -3392,23 +5247,279 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         }
       };
 
+      const onKeyUp = (e: KeyboardEvent) => {
+        const normKey = e.code === 'Space' ? ' ' : e.key.toLowerCase();
+        playKeysRef.current.delete(normKey);
+      };
+
       window.addEventListener('keydown', onKeyDown);
-      return () => window.removeEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+      return () => {
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup', onKeyUp);
+      };
     }, [
       alignCameraToCurrentView,
       deleteSelected,
       duplicateSelected,
+      focusSelected,
       getActiveSceneCameraPair,
       onGizmoModeChange,
+      redo,
       requestRender,
       resetView,
       setCameraPreset,
+      setToolMode,
+      stopPlayMode,
       toggleLookThroughCamera,
       toggleOrtho,
+      togglePlayCameraMode,
+      undo,
     ]);
 
-    // Canvas click for Raycast Select & 2-Point Measure Tape
+    // Helper: raycast active model or Y=0 ground plane for brushes & cursor coordinates
+    const raycastStagePoint = (clientX: number, clientY: number) => {
+      const renderer = rendererRef.current;
+      const cam = activeCamRef.current;
+      const root = activeModelRootRef.current;
+      if (!renderer || !cam) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, cam);
+      const hits = root ? raycaster.intersectObject(root, true).filter((h) => !h.object.userData?.isEditorHelper) : [];
+      if (hits.length > 0) {
+        return { hit: hits[0], point: hits[0].point.clone(), normal: hits[0].face?.normal?.clone() || new THREE.Vector3(0, 1, 0) };
+      }
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      const planePt = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(groundPlane, planePt)) {
+        return { hit: null, point: planePt, normal: new THREE.Vector3(0, 1, 0) };
+      }
+      return null;
+    };
+
+    const findTerrainHitMesh = (hitObj: THREE.Object3D | null): THREE.Mesh | null => {
+      if (
+        hitObj &&
+        (hitObj as THREE.Mesh).isMesh &&
+        (hitObj.userData?.isTerrain || hitObj.userData?.isTerrainMesh)
+      ) {
+        return hitObj as THREE.Mesh;
+      }
+      const root = activeModelRootRef.current;
+      if (!root) return null;
+      let fallback: THREE.Mesh | null = null;
+      root.traverse((o) => {
+        if (
+          !fallback &&
+          (o as THREE.Mesh).isMesh &&
+          (o.userData?.isTerrain || o.userData?.isTerrainMesh)
+        ) {
+          fallback = o as THREE.Mesh;
+        }
+      });
+      return fallback;
+    };
+
+    const applyBrushAtPoint = (point: THREE.Vector3, hitObj: THREE.Object3D | null, mode: ViewportToolMode) => {
+      if (mode === 'terrain-sculpt' || mode === 'terrain-paint') {
+        const terrainMesh = brushStrokeRef.current.targetMesh || findTerrainHitMesh(hitObj);
+        if (!terrainMesh) return;
+        if (!brushStrokeRef.current.targetMesh) {
+          brushStrokeRef.current.targetMesh = terrainMesh;
+          brushStrokeRef.current.beforeSnapshot = captureTerrainSnapshot(terrainMesh);
+        }
+        const cfg = propsRef.current.terrainBrush;
+        if (mode === 'terrain-sculpt') {
+          applyTerrainSculptBrush(terrainMesh, point, {
+            mode: cfg.mode,
+            radius: cfg.radius,
+            strength: cfg.strength,
+            flattenTargetY: cfg.flattenTargetY,
+          });
+        } else {
+          applyTerrainPaintBrush(terrainMesh, point, {
+            layer: cfg.paintLayer,
+            radius: cfg.radius,
+            strength: cfg.strength,
+          });
+        }
+        requestRender();
+      } else if (mode === 'scatter-brush') {
+        const root = activeModelRootRef.current;
+        if (!root) return;
+        const cfg = propsRef.current.scatterBrush;
+        const lastPos = brushStrokeRef.current.lastScatterPos;
+        const minStep = Math.max(0.4, cfg.radius * 0.45);
+        if (lastPos && lastPos.distanceTo(point) < minStep) return;
+        brushStrokeRef.current.lastScatterPos = point.clone();
+
+        const count = Math.max(1, Math.min(6, Math.round(cfg.density)));
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = Math.sqrt(Math.random()) * cfg.radius;
+          const px = point.x + Math.cos(angle) * dist;
+          const pz = point.z + Math.sin(angle) * dist;
+          let py = point.y;
+          const terrainMesh = findTerrainHitMesh(hitObj);
+          if (terrainMesh) {
+            const sampled = sampleTerrainHeightAt(terrainMesh, px, pz);
+            if (sampled !== null) py = sampled;
+          }
+          const scale = cfg.minScale + Math.random() * Math.max(0.05, cfg.maxScale - cfg.minScale);
+          const prop = createScatterBrushProp(cfg.preset, primitiveCounterRef.current++);
+          prop.position.set(px, py, pz);
+          prop.rotation.y = Math.random() * Math.PI * 2;
+          prop.scale.setScalar(scale);
+          root.add(prop);
+          prop.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              originalMaterialsRef.current.set(child as THREE.Mesh, (child as THREE.Mesh).material);
+            }
+          });
+          brushStrokeRef.current.createdProps.push(prop);
+        }
+        requestRender();
+      }
+    };
+
+    const handleCanvasPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+      if (playModeActiveRef.current) {
+        playLookDragRef.current = {
+          active: true,
+          pointerId: e.pointerId,
+          lastX: e.clientX,
+          lastY: e.clientY,
+        };
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore pointer capture errors
+        }
+        return;
+      }
+
+      const mode = propsRef.current.toolMode;
+      if (mode === 'terrain-sculpt' || mode === 'terrain-paint' || mode === 'scatter-brush') {
+        const res = raycastStagePoint(e.clientX, e.clientY);
+        if (!res) return;
+        if ((mode === 'terrain-sculpt' || mode === 'terrain-paint') && !findTerrainHitMesh(res.hit?.object || null)) {
+          onNotify('Spawn a Terrain mesh from the World tab to sculpt or paint');
+          return;
+        }
+        brushStrokeRef.current = {
+          active: true,
+          mode,
+          targetMesh: null,
+          beforeSnapshot: null,
+          createdProps: [],
+          lastScatterPos: null,
+        };
+        applyBrushAtPoint(res.point, res.hit?.object || null, mode);
+      }
+    };
+
+    const handleCanvasPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (playModeActiveRef.current) {
+        if (
+          playLookDragRef.current.active &&
+          (playLookDragRef.current.pointerId === null ||
+            playLookDragRef.current.pointerId === e.pointerId) &&
+          playerStateRef.current
+        ) {
+          const dx = e.clientX - playLookDragRef.current.lastX;
+          const dy = e.clientY - playLookDragRef.current.lastY;
+          playLookDragRef.current.lastX = e.clientX;
+          playLookDragRef.current.lastY = e.clientY;
+          playerStateRef.current.yaw -= dx * 0.0055;
+          playerStateRef.current.pitch = THREE.MathUtils.clamp(
+            playerStateRef.current.pitch - dy * 0.0045,
+            -1.15,
+            0.95
+          );
+          requestRender();
+        }
+        return;
+      }
+
+      const mode = propsRef.current.toolMode;
+      const isBrush = mode === 'terrain-sculpt' || mode === 'terrain-paint' || mode === 'scatter-brush';
+      const res = raycastStagePoint(e.clientX, e.clientY);
+      if (res) {
+        cursorWorldRef.current = [res.point.x, res.point.y, res.point.z];
+        if (isBrush && brushCursorRef.current) {
+          const radius =
+            mode === 'scatter-brush'
+              ? propsRef.current.scatterBrush.radius
+              : propsRef.current.terrainBrush.radius;
+          brushCursorRef.current.visible = true;
+          brushCursorRef.current.position.copy(res.point);
+          brushCursorRef.current.scale.set(radius, 1, radius);
+          requestRender();
+        }
+        if (brushStrokeRef.current.active) {
+          applyBrushAtPoint(res.point, res.hit?.object || null, brushStrokeRef.current.mode);
+        }
+      }
+    };
+
+    // Canvas click for Raycast Select, 2-Point Measure Tape, and Brush Stroke Commit
     const handleCanvasPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (playModeActiveRef.current) {
+        if (
+          playLookDragRef.current.pointerId === null ||
+          playLookDragRef.current.pointerId === e.pointerId
+        ) {
+          playLookDragRef.current = { active: false, pointerId: null, lastX: 0, lastY: 0 };
+        }
+        return;
+      }
+
+      if (brushStrokeRef.current.active) {
+        const stroke = brushStrokeRef.current;
+        brushStrokeRef.current = {
+          active: false,
+          mode: 'orbit',
+          targetMesh: null,
+          beforeSnapshot: null,
+          createdProps: [],
+          lastScatterPos: null,
+        };
+        if ((stroke.mode === 'terrain-sculpt' || stroke.mode === 'terrain-paint') && stroke.targetMesh && stroke.beforeSnapshot) {
+          const mesh = stroke.targetMesh;
+          const before = stroke.beforeSnapshot;
+          const after = captureTerrainSnapshot(mesh);
+          recordUndoCommand(
+            stroke.mode === 'terrain-sculpt' ? 'Terrain Sculpt Stroke' : 'Terrain Paint Stroke',
+            () => restoreTerrainSnapshot(mesh, before),
+            () => restoreTerrainSnapshot(mesh, after)
+          );
+          inspectActiveModel(captionModelName);
+        } else if (stroke.mode === 'scatter-brush' && stroke.createdProps.length > 0 && activeModelRootRef.current) {
+          const root = activeModelRootRef.current;
+          const added = [...stroke.createdProps];
+          recordUndoCommand(
+            `Scatter Brush (${added.length} props)`,
+            () => {
+              added.forEach((p) => root.remove(p));
+            },
+            () => {
+              added.forEach((p) => root.add(p));
+            }
+          );
+          applyVisualMaterials();
+          inspectActiveModel(captionModelName);
+          onNotify(`Scattered ${added.length} props`);
+        }
+        return;
+      }
+
       const mode = propsRef.current.toolMode;
       if (mode !== 'select' && mode !== 'measure') return;
       if (e.button !== 0) return;
@@ -3446,13 +5557,17 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         if (measurePointsRef.current.length >= 2) {
           measurePointsRef.current = [];
           while (grp.children.length > 0) {
-            grp.remove(grp.children[0]);
+            const child = grp.children[0];
+            grp.remove(child);
+            if ((child as THREE.Mesh).geometry) (child as THREE.Mesh).geometry.dispose();
+            const mat = (child as THREE.Mesh).material;
+            if (mat && !Array.isArray(mat)) mat.dispose();
           }
           setMeasuredDistance(null);
         }
         measurePointsRef.current.push(pt);
         const marker = new THREE.Mesh(
-          new THREE.SphereGeometry(0.022, 16, 16),
+          new THREE.SphereGeometry(0.025, 16, 16),
           new THREE.MeshBasicMaterial({ color: '#2D5A4C' })
         );
         marker.position.copy(pt);
@@ -3475,7 +5590,11 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
       measurePointsRef.current = [];
       if (measureGroupRef.current) {
         while (measureGroupRef.current.children.length > 0) {
-          measureGroupRef.current.remove(measureGroupRef.current.children[0]);
+          const child = measureGroupRef.current.children[0];
+          measureGroupRef.current.remove(child);
+          if ((child as THREE.Mesh).geometry) (child as THREE.Mesh).geometry.dispose();
+          const mat = (child as THREE.Mesh).material;
+          if (mat && !Array.isArray(mat)) mat.dispose();
         }
       }
       setMeasuredDistance(null);
@@ -3505,14 +5624,43 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         {/* WebGL Canvas Host */}
         <div
           ref={containerRef}
+          onPointerDown={handleCanvasPointerDown}
+          onPointerMove={handleCanvasPointerMove}
           onPointerUp={handleCanvasPointerUp}
           className={`h-full w-full ${
-            toolMode === 'measure' || toolMode === 'select'
-              ? 'cursor-crosshair'
-              : dragMode === 'pan'
-                ? 'cursor-grab'
-                : 'cursor-default'
+            playModeStatus.active
+              ? 'cursor-grab active:cursor-grabbing'
+              : toolMode === 'measure' ||
+                  toolMode === 'select' ||
+                  toolMode === 'terrain-sculpt' ||
+                  toolMode === 'terrain-paint' ||
+                  toolMode === 'scatter-brush'
+                ? 'cursor-crosshair'
+                : dragMode === 'pan'
+                  ? 'cursor-grab'
+                  : 'cursor-default'
           }`}
+        />
+
+        {/* Theme-Consistent Multi-Angle Bar, Overlays, Telemetry HUD & Mobile Play Mode Controls */}
+        <ViewportHud
+          hud={hudState}
+          activePreset={activePresetLabel}
+          autoSpin={autoSpin}
+          overlays={overlays}
+          playMode={playModeStatus}
+          zenMode={controlsHidden}
+          inspectorOpen={inspectorOpen}
+          gravityEnabled={physicsConfig.gravityEnabled}
+          gravityStrength={physicsConfig.gravityStrength}
+          onCameraPreset={setCameraPreset}
+          onFocusSelected={focusSelected}
+          onToggleAutoSpin={onToggleAutoSpin}
+          onToggleOverlay={onToggleOverlay}
+          onStopPlayMode={stopPlayMode}
+          onTogglePlayCameraMode={togglePlayCameraMode}
+          onCycleGravityMode={onCycleGravityMode}
+          onPlayVirtualKey={handlePlayVirtualKey}
         />
 
         {/* Quad-View subtle divider crosshairs & labels */}
@@ -3541,22 +5689,28 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           </div>
         )}
 
-        {/* TOP-LEFT EDITORIAL CAPTION */}
-        {!controlsHidden && (
-          <div className="pointer-events-none absolute top-5 left-5 z-20 max-w-[235px] select-none sm:left-7 sm:max-w-xs">
-            <h1 className="font-display text-[19px] leading-tight font-medium tracking-[-0.015em] text-[#1C1B19] sm:text-[22px]">
+        {/* TOP-LEFT EDITORIAL CAPTION (Hidden in Play Mode so banner never collides) */}
+        {!controlsHidden && !playModeStatus.active && (
+          <div
+            className={`pointer-events-none absolute top-3 left-3 z-20 max-w-[205px] select-none sm:top-3.5 sm:left-4 sm:max-w-[270px] ${
+              worldEnvPreset !== 'alabaster'
+                ? 'rounded-xl border border-[#E5E1DA] bg-white px-3 py-2 shadow-[0_6px_18px_rgba(28,27,25,0.08)] sm:px-3.5 sm:py-2.5'
+                : 'pt-0.5'
+            }`}
+          >
+            <h1 className="truncate font-display text-[15px] leading-tight font-medium tracking-[-0.015em] text-[#1C1B19] sm:text-[18px]">
               {captionModelName}
             </h1>
-            <p className="mt-1 font-mono text-[10.5px] text-[#6E6960] tabular-nums sm:text-[11px]">
+            <p className="mt-0.5 hidden truncate font-mono text-[10.5px] text-[#6E6960] tabular-nums sm:block">
               {captionSummary} · {activeShadingLabel}
             </p>
-            <div className="pointer-events-auto mt-2 flex items-center gap-2.5 text-[12px] font-medium">
+            <div className="pointer-events-auto mt-1 flex items-center gap-2 text-[11px] font-medium sm:mt-1.5 sm:gap-2.5 sm:text-[12px]">
               <button
                 type="button"
                 onClick={onOpenLibrary}
                 className="text-[#2D5A4C] underline-offset-4 transition-colors hover:text-[#1C1B19] hover:underline"
               >
-                Model Library
+                Library
               </button>
               <span className="text-[#CBC4B9]">·</span>
               <button
@@ -3564,7 +5718,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
                 onClick={onToggleInspector}
                 className="text-[#5A564F] underline-offset-4 transition-colors hover:text-[#1C1B19] hover:underline"
               >
-                {inspectorOpen ? 'Hide Inspector' : 'Open Inspector'}
+                {inspectorOpen ? 'Hide Inspector' : 'Inspector'}
               </button>
             </div>
           </div>
@@ -3633,9 +5787,9 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
           </div>
         )}
 
-        {/* TOP-RIGHT 3D AXIS COMPASS & CAMERA UTILITIES */}
-        {!controlsHidden && !inspectorOpen && (
-          <div className="absolute top-5 right-4 z-20 flex flex-col items-center gap-2 sm:right-6">
+        {/* TOP-RIGHT 3D AXIS COMPASS & CAMERA UTILITIES (Desktop lg+ only, zero overlap with Views bar) */}
+        {!controlsHidden && !inspectorOpen && !playModeStatus.active && (
+          <div className="hidden lg:flex absolute top-16 right-4 z-20 flex-col items-center gap-2">
             <canvas
               ref={compassCanvasRef}
               onClick={handleCompassClick}
@@ -3703,7 +5857,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         )}
 
         {/* UNIFIED COLLAPSIBLE BOTTOM FLOATING DOCK */}
-        {controlsHidden ? (
+        {playModeStatus.active ? null : controlsHidden ? (
           <button
             type="button"
             onClick={() => setControlsHidden(false)}
@@ -3715,7 +5869,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
         ) : (
           <div className="fixed bottom-4 left-1/2 z-20 max-w-[calc(100vw-1.5rem)] -translate-x-1/2">
             {openPopover === 'shading' && (
-              <div className="atelier-surface animate-atelier-popover absolute bottom-14 left-1/2 w-64 -translate-x-1/2 rounded-2xl p-2.5">
+              <div className="atelier-surface animate-atelier-popover absolute bottom-14 left-1/2 w-64 max-w-[calc(100vw-24px)] -translate-x-1/2 rounded-2xl p-2.5">
                 <div className="px-2 pb-1.5 text-[10.5px] font-semibold tracking-[0.04em] text-[#847E75] uppercase">
                   Shading Pass
                 </div>
@@ -3745,7 +5899,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             )}
 
             {openPopover === 'lighting' && (
-              <div className="atelier-surface animate-atelier-popover absolute bottom-14 left-1/2 w-72 -translate-x-1/2 space-y-3 rounded-2xl p-3.5">
+              <div className="atelier-surface animate-atelier-popover absolute bottom-14 left-1/2 w-72 max-w-[calc(100vw-24px)] -translate-x-1/2 space-y-3 rounded-2xl p-3.5">
                 <div>
                   <div className="mb-1.5 text-[10.5px] font-semibold tracking-[0.04em] text-[#847E75] uppercase">
                     Studio Lighting
@@ -3807,7 +5961,7 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
             )}
 
             {openPopover === 'more' && (
-              <div className="atelier-surface animate-atelier-popover absolute right-0 bottom-14 w-72 space-y-3 rounded-2xl p-3.5">
+              <div className="atelier-surface animate-atelier-popover absolute right-0 bottom-14 w-72 max-w-[calc(100vw-24px)] space-y-3 rounded-2xl p-3.5">
                 <div>
                   <div className="mb-1.5 text-[10.5px] font-semibold tracking-[0.04em] text-[#847E75] uppercase">
                     Camera Presets
@@ -3981,6 +6135,20 @@ export const StudioViewport = forwardRef<StudioViewportHandle, StudioViewportPro
                 }`}
               >
                 <RotateCw className="h-3.5 w-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onGizmoModeChange(gizmoMode === 'scale' ? 'none' : 'scale')}
+                title="Scale Gizmo (S)"
+                aria-label="Toggle scale gizmo"
+                className={`flex items-center gap-1 rounded-xl px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                  gizmoMode === 'scale'
+                    ? 'bg-[#2D5A4C] text-white'
+                    : 'text-[#5A564F] hover:bg-[#F5F3EF] hover:text-[#1C1B19]'
+                }`}
+              >
+                <Scaling className="h-3.5 w-3.5" />
               </button>
 
               <button

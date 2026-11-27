@@ -1,0 +1,10 @@
+{
+  "slug": "xbot-rig",
+  "name": "Xbot Articulated Rig",
+  "group": "Characters",
+  "source": "threejs-official-sample",
+  "license": "MIT",
+  "modelFile": "/models/xbot.glb",
+  "previewUrl": "/models/previews/xbot.png",
+  "description": "Articulated humanoid character rig with Idle, Walk, Run, and emote skeletal animations."
+}

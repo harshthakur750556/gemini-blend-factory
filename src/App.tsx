@@ -1,5 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRightLeft, Download } from 'lucide-react';
+import {
+  ArrowRightLeft,
+  BookOpen,
+  Download,
+  Feather,
+  Layers,
+  Magnet,
+  Menu,
+  Play,
+  Redo2,
+  SlidersHorizontal,
+  Square,
+  Undo2,
+  User,
+  Wind,
+  X,
+} from 'lucide-react';
 import * as THREE from 'three';
 import { StudioViewport, type StudioViewportHandle } from './components/StudioViewport';
 import { InspectorSheet } from './components/InspectorSheet';
@@ -8,6 +24,8 @@ import { LibraryModal } from './components/LibraryModal';
 import { ExportDialog } from './components/ExportDialog';
 import { ConverterModal } from './components/ConverterModal';
 import { TwoFactorModal } from './components/TwoFactorModal';
+import { ManualModal } from './components/ManualModal';
+import { CreatorModal } from './components/CreatorModal';
 import {
   DEFAULT_BLENDER_SKILL,
   STARTER_BUILD_PY,
@@ -52,11 +70,15 @@ import type {
   GizmoMode,
   GizmoSpace,
   HarnessActivityItem,
+  HistoryStateSummary,
   InsideOutSide,
   InspectorTabId,
   MaterialChannelInfo,
   ModelGroupName,
   OutlinerNode,
+  PhysicsConfig,
+  PlayModeStatus,
+  ScatterBrushConfig,
   SceneTelemetry,
   SectionCutConfig,
   SelectedCameraInfo,
@@ -65,8 +87,11 @@ import type {
   ShadingPass,
   StudioLightingPreset,
   SurfaceParams,
+  TerrainBrushConfig,
   TopologyDiagnostics,
   TransformInfo,
+  ViewportOverlayFlags,
+  ViewportToolMode,
   VisionCritiqueResult,
   WorkbenchTabId,
   WorkspaceFileEntry,
@@ -74,18 +99,88 @@ import type {
   WorldEnvironmentPreset,
 } from './types';
 
-const SINGLE_SAMPLE_MODEL: AvailableModelItem = {
-  id: 'sample:stone-lantern',
-  slug: 'stone-cedar-lantern',
-  name: 'Stone & Cedar Lantern',
-  source: 'specimen',
-  format: 'procedural',
-  group: 'Sample',
-  specimenKind: 'stone-lantern',
-  viewable: true,
-  description:
-    'Curated architectural garden lantern with beveled granite plinth, hinoki cedar kumiko lattice, patinated bronze collars, warm washi core, and stepped slate pagoda roof.',
-};
+const REPOSITORY_CHARACTER_MODELS: AvailableModelItem[] = [
+  {
+    id: 'repo:michelle',
+    slug: 'michelle',
+    name: 'Michelle',
+    source: 'specimen',
+    format: '.glb',
+    group: 'Female_Characters',
+    sizeBytes: 3340928,
+    url: '/models/michelle.glb',
+    previewUrl: '/models/previews/michelle.png',
+    repoFolderPath: 'models/michelle',
+    viewable: true,
+    updatedAt: '2026-11-26T18:10:00.000Z',
+    description:
+      'Rigged and animated stylized female character model from the official Three.js glTF sample collection (MIT / Mixamo Sample).',
+  },
+  {
+    id: 'repo:tactical-soldier',
+    slug: 'tactical-soldier',
+    name: 'Tactical Soldier',
+    source: 'specimen',
+    format: '.glb',
+    group: 'Male_Characters',
+    sizeBytes: 2160468,
+    url: '/models/player-character.glb',
+    previewUrl: '/models/previews/player-character.png',
+    repoFolderPath: 'models/tactical-soldier',
+    viewable: true,
+    updatedAt: '2026-11-26T18:09:00.000Z',
+    description:
+      'Rigged animated male tactical character with Idle, Walk, and Run skeletal animation clips (MIT, powers Play Mode).',
+  },
+  {
+    id: 'repo:cesium-explorer',
+    slug: 'cesium-explorer',
+    name: 'Cesium Explorer',
+    source: 'specimen',
+    format: '.glb',
+    group: 'Male_Characters',
+    sizeBytes: 438272,
+    url: '/models/cesium-man.glb',
+    previewUrl: '/models/previews/cesium-man.png',
+    repoFolderPath: 'models/cesium-explorer',
+    viewable: true,
+    updatedAt: '2026-11-26T18:08:00.000Z',
+    description:
+      'Rigged walking male explorer character from the official Khronos Group glTF Sample Assets repository (CC-BY 4.0).',
+  },
+  {
+    id: 'repo:xbot-rig',
+    slug: 'xbot-rig',
+    name: 'Xbot Articulated Rig',
+    source: 'specimen',
+    format: '.glb',
+    group: 'Characters',
+    sizeBytes: 2936012,
+    url: '/models/xbot.glb',
+    previewUrl: '/models/previews/xbot.png',
+    repoFolderPath: 'models/xbot-rig',
+    viewable: true,
+    updatedAt: '2026-11-26T18:07:00.000Z',
+    description:
+      'Articulated humanoid character rig with Idle, Walk, Run, and emote skeletal animations from Three.js examples (MIT).',
+  },
+  {
+    id: 'repo:expressive-robot',
+    slug: 'expressive-robot',
+    name: 'Expressive Robot',
+    source: 'specimen',
+    format: '.glb',
+    group: 'Characters',
+    sizeBytes: 464896,
+    url: '/models/robot-expressive.glb',
+    previewUrl: '/models/previews/robot-expressive.png',
+    repoFolderPath: 'models/expressive-robot',
+    viewable: true,
+    updatedAt: '2026-11-26T18:06:00.000Z',
+    description:
+      'Expressive rigged character with skeletal locomotion and morph-target facial expressions from Three.js examples (CC0 1.0).',
+  },
+];
 
 function nowStamp(): string {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -139,16 +234,29 @@ export function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [converterOpen, setConverterOpen] = useState(false);
   const [twoFactorOpen, setTwoFactorOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // 3D Viewport & World Assembly State
+  // 3D Viewport & World Assembly State (clean warm-porcelain Atelier studio)
   const [shadingPass, setShadingPass] = useState<ShadingPass>('combined');
   const [quadView, setQuadView] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+  const [overlays, setOverlays] = useState<ViewportOverlayFlags>({
+    showGrid: true,
+    showAxes: false,
+    showBounds: false,
+    showColliders: false,
+  });
+  const [cameraFov, setCameraFov] = useState(42);
+  const [cameraSpeed, setCameraSpeed] = useState(1.0);
   const [autoSpin, setAutoSpin] = useState(false);
   const [exploded, setExploded] = useState(false);
   const [lightingPreset, setLightingPreset] = useState<StudioLightingPreset>('studio-4k');
   const [lightAngleDeg, setLightAngleDeg] = useState(42);
+  const [sunElevationDeg, setSunElevationDeg] = useState(48);
+  const [shadowsEnabled, setShadowsEnabled] = useState(true);
   const [wireframeOpacity, setWireframeOpacity] = useState(0);
   const [insideOutSide, setInsideOutSide] = useState<InsideOutSide>('front');
   const [showSkeleton, setShowSkeleton] = useState(false);
@@ -156,8 +264,48 @@ export function App() {
   const [gizmoSpace, setGizmoSpace] = useState<GizmoSpace>('world');
   const [snapGrid, setSnapGrid] = useState<number>(0);
   const [snapRotateDeg, setSnapRotateDeg] = useState<number>(0);
+  const [snapScale, setSnapScale] = useState<number>(0);
   const [worldEnvPreset, setWorldEnvPreset] = useState<WorldEnvironmentPreset>('alabaster');
-  const [worldFogDensity, setWorldFogDensity] = useState<number>(0.036);
+  const [worldFogDensity, setWorldFogDensity] = useState<number>(0.012);
+  const [worldFogHeight, setWorldFogHeight] = useState<number>(0);
+  const [activeToolMode, setActiveToolMode] = useState<ViewportToolMode>('orbit');
+  const [terrainBrush, setTerrainBrush] = useState<TerrainBrushConfig>({
+    mode: 'raise',
+    paintLayer: 'grass',
+    radius: 3.0,
+    strength: 0.45,
+    flattenTargetY: 0,
+  });
+  const [scatterBrush, setScatterBrush] = useState<ScatterBrushConfig>({
+    preset: 'pine-tree',
+    radius: 2.5,
+    density: 2,
+    minScale: 0.75,
+    maxScale: 1.35,
+    alignToNormal: true,
+  });
+  const [physicsConfig, setPhysicsConfig] = useState<PhysicsConfig>({
+    gravityEnabled: true,
+    gravityStrength: 9.81,
+    liveSimulation: false,
+  });
+  const [historySummary, setHistorySummary] = useState<HistoryStateSummary>({
+    canUndo: false,
+    canRedo: false,
+    undoLabel: null,
+    redoLabel: null,
+    undoCount: 0,
+    redoCount: 0,
+  });
+  const [playModeStatus, setPlayModeStatus] = useState<PlayModeStatus>({
+    active: false,
+    cameraMode: 'third-person',
+    playerX: 0,
+    playerY: 0,
+    playerZ: 0,
+    grounded: true,
+    sprinting: false,
+  });
   const [surfaceParams, setSurfaceParams] = useState<SurfaceParams>({
     overrideEnabled: false,
     baseColor: '#7B7871',
@@ -175,7 +323,7 @@ export function App() {
 
   // Scene Telemetry & Inspector State
   const [telemetry, setTelemetry] = useState<SceneTelemetry>({
-    modelName: 'Stone & Cedar Lantern',
+    modelName: 'Michelle',
     meshCount: 0,
     boneCount: 0,
     materialCount: 0,
@@ -212,7 +360,7 @@ export function App() {
   const [soloNodeUuid, setSoloNodeUuid] = useState<string | null>(null);
   const [transformInfo, setTransformInfo] = useState<TransformInfo>({
     uuid: null,
-    name: 'Stone & Cedar Lantern',
+    name: 'Michelle',
     posX: 0,
     posY: 0,
     posZ: 0,
@@ -237,8 +385,8 @@ export function App() {
   const [isStaticSite, setIsStaticSite] = useState(false);
   const [serverConfig, setServerConfig] = useState<ServerConfig | null>(null);
   const [ciStatus, setCiStatus] = useState<GitHubCiStatus | null>(null);
-  const [activeModelId, setActiveModelId] = useState<string | null>(SINGLE_SAMPLE_MODEL.id);
-  const [activeModelSlug, setActiveModelSlug] = useState<string>('stone-cedar-lantern');
+  const [activeModelId, setActiveModelId] = useState<string | null>(REPOSITORY_CHARACTER_MODELS[0].id);
+  const [activeModelSlug, setActiveModelSlug] = useState<string>(REPOSITORY_CHARACTER_MODELS[0].slug);
   const [githubModels, setGithubModels] = useState<AvailableModelItem[]>([]);
   const [driveModels, setDriveModels] = useState<AvailableModelItem[]>([]);
   const [localModels, setLocalModels] = useState<AvailableModelItem[]>([]);
@@ -642,6 +790,9 @@ export function App() {
         setExportOpen(false);
         setConverterOpen(false);
         setTwoFactorOpen(false);
+        setManualOpen(false);
+        setCreatorOpen(false);
+        setMobileMenuOpen(false);
         setGizmoMode('none');
       } else if (e.altKey && e.ctrlKey && e.key.toLowerCase() === 'q') {
         e.preventDefault();
@@ -682,12 +833,16 @@ export function App() {
     }
   };
 
-  // All available models (ONLY ONE curated sample model!)
+  // All available models (Categorized Repository Characters + Cloud/Drive/Local)
   const allAvailableModels = useMemo<AvailableModelItem[]>(() => {
+    const repoSlugs = new Set(REPOSITORY_CHARACTER_MODELS.map((m) => m.slug));
+    const filteredGithub = githubModels.filter(
+      (m) => !repoSlugs.has(m.slug) && m.slug !== 'celestial-sky-citadel' && m.slug !== 'stone-cedar-lantern'
+    );
     return [
-      SINGLE_SAMPLE_MODEL,
+      ...REPOSITORY_CHARACTER_MODELS,
       ...staticPagesModels,
-      ...githubModels,
+      ...filteredGithub,
       ...driveModels,
       ...localModels,
     ];
@@ -697,7 +852,12 @@ export function App() {
   const handleSelectModel = async (item: AvailableModelItem) => {
     try {
       setActiveModelSlug(item.slug || sanitizeModelSlug(item.name));
-      if (item.source === 'specimen') {
+      if (item.source === 'specimen' && !item.url) {
+        setWorldEnvPreset('alabaster');
+        setWorldFogDensity(0.012);
+        setCameraFov(42);
+        setShowGrid(true);
+        setOverlays((o) => ({ ...o, showGrid: true }));
         viewportRef.current?.loadStarterLantern();
         setActiveModelId(item.id);
         notify(`Loaded ${item.name}`);
@@ -776,8 +936,8 @@ export function App() {
     }
   };
 
-  // Import local 3D file
-  const handleImportLocalFile = async (file: File) => {
+  // Import local 3D file into chosen category and auto-generate thumbnail preview
+  const handleImportLocalFile = async (file: File, group: ModelGroupName = 'Props') => {
     const check = validateModelUpload(file.name, file.size);
     if (!check.valid || !check.sanitizedName || !check.extension) {
       notify(check.reason || 'Unsupported 3D file');
@@ -789,13 +949,14 @@ export function App() {
     }
     const blobUrl = URL.createObjectURL(file);
     const slug = sanitizeModelSlug(check.sanitizedName);
+    const itemId = `local:${Date.now()}-${check.sanitizedName}`;
     const newItem: AvailableModelItem = {
-      id: `local:${Date.now()}-${check.sanitizedName}`,
+      id: itemId,
       slug,
       name: check.sanitizedName,
       source: 'local-file',
       format: check.extension as AvailableModelItem['format'],
-      group: 'Props',
+      group,
       sizeBytes: file.size,
       url: blobUrl,
       viewable: true,
@@ -803,9 +964,18 @@ export function App() {
     };
     setLocalModels((prev) => [newItem, ...prev]);
     await viewportRef.current?.loadModelFromUrl(blobUrl, newItem.name, newItem.format);
-    setActiveModelId(newItem.id);
+    setActiveModelId(itemId);
     setActiveModelSlug(slug);
     setLibraryOpen(false);
+    // Capture a live viewport preview thumbnail for the imported model card
+    window.setTimeout(() => {
+      const snap = viewportRef.current?.captureSnapshot(false);
+      if (snap) {
+        setLocalModels((prev) =>
+          prev.map((m) => (m.id === itemId ? { ...m, previewUrl: snap } : m))
+        );
+      }
+    }, 350);
   };
 
   // Upload a local file directly into organized GitHub models/<slug>/
@@ -1544,80 +1714,351 @@ export function App() {
     { id: 'pipeline', label: 'Pipeline' },
   ];
 
+  const handleToggleOverlay = useCallback((key: keyof ViewportOverlayFlags) => {
+    if (key === 'showGrid') {
+      setShowGrid((prev) => {
+        const next = !prev;
+        setOverlays((o) => ({ ...o, showGrid: next }));
+        return next;
+      });
+      return;
+    }
+    setOverlays((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  // Cycle gravity cleanly: Normal (9.81 m/s²) -> Low-G (3.5 m/s²) -> Zero-G Sky Flight -> Normal
+  const handleCycleGravityMode = useCallback(() => {
+    setPhysicsConfig((prev) => {
+      if (prev.gravityEnabled && prev.gravityStrength >= 6) {
+        notify('Low-G Gravity (3.5 m/s² — floating island leaps)');
+        return { ...prev, gravityEnabled: true, gravityStrength: 3.5 };
+      }
+      if (prev.gravityEnabled) {
+        notify('Zero-G Sky Flight (Space ascends · C/Down descends)');
+        return { ...prev, gravityEnabled: false, gravityStrength: 9.81 };
+      }
+      notify('Normal Gravity (9.81 m/s²)');
+      return { ...prev, gravityEnabled: true, gravityStrength: 9.81 };
+    });
+  }, [notify]);
+
+  const gravityHeaderLabel = !physicsConfig.gravityEnabled
+    ? 'Fly (0G)'
+    : physicsConfig.gravityStrength < 6
+      ? 'Low-G'
+      : 'Gravity';
+
+  const handleSaveTexturesToRepo = useCallback(async () => {
+    const root = viewportRef.current?.getActiveModelRoot();
+    if (!root) {
+      notify('Load a 3D model first');
+      return;
+    }
+    const extracted = await extractTexturesFromObject3D(root);
+    if (extracted.length === 0) {
+      notify('Apply a procedural PBR map or load a textured asset first');
+      return;
+    }
+    if (serverConfig?.githubConfigured) {
+      try {
+        await handleSaveActiveStageToGithub('Props');
+        return;
+      } catch (err) {
+        notify(err instanceof Error ? err.message : 'Unable to save textures to GitHub');
+        return;
+      }
+    }
+    // Fallback: download first extracted texture locally so creator always gets tangible output
+    extracted.slice(0, 3).forEach((t) => triggerBlobDownload(t.blob, t.name));
+    notify(`Extracted ${extracted.length} PBR texture map(s)`);
+  }, [handleSaveActiveStageToGithub, notify, serverConfig?.githubConfigured]);
+
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[#F5F3EF] text-[#1C1B19]">
-      {/* 3-ZONE TOP HEADER: [Brand Wordmark] — [4 Clean Workspace Modes] — [Convert + Export CTA] */}
-      <header className="z-30 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-[#E5E1DA] bg-white px-3.5 sm:px-6">
-        {/* Left: Brand Wordmark */}
-        <button
-          type="button"
-          onClick={() => handleSelectWorkspaceMode('inspect')}
-          aria-label="BlendFactory Home"
-          className="flex shrink-0 items-center gap-2 text-left transition-opacity hover:opacity-80"
-        >
-          <span
-            aria-hidden="true"
-            className="flex h-6 w-6 items-center justify-center rounded-md bg-[#2D5A4C] text-white"
+      {/* RESPONSIVE 3-ZONE TOP HEADER (Zero overflow from 360px mobile to 1440px+ desktop) */}
+      <header className="relative z-40 flex h-13 shrink-0 items-center justify-between gap-2 border-b border-[#E5E1DA] bg-white px-2.5 sm:h-14 sm:px-5">
+        {/* Left: Brand Wordmark + Undo / Redo */}
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={() => handleSelectWorkspaceMode('inspect')}
+            aria-label="BlendFactory Home"
+            className="flex shrink-0 items-center gap-2 text-left transition-opacity hover:opacity-80"
           >
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-              <path
-                d="M8 1.5L14 5V11L8 14.5L2 11V5L8 1.5Z"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-              <path d="M8 8V14.5M8 8L14 5M8 8L2 5" stroke="currentColor" strokeWidth="1.3" />
-            </svg>
-          </span>
-          <span className="hidden font-display text-[17px] font-medium tracking-[-0.02em] text-[#1C1B19] sm:inline">
-            BlendFactory
-          </span>
-        </button>
+            <span
+              aria-hidden="true"
+              className="flex h-6 w-6 items-center justify-center rounded-md bg-[#2D5A4C] text-white"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 1.5L14 5V11L8 14.5L2 11V5L8 1.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <path d="M8 8V14.5M8 8L14 5M8 8L2 5" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
+            </span>
+            <span className="hidden font-display text-[17px] font-medium tracking-[-0.02em] text-[#1C1B19] sm:inline">
+              BlendFactory
+            </span>
+          </button>
 
-        {/* Center: 4 Single-Line Workspace Modes */}
-        <nav aria-label="Workspace modes" className="flex items-center gap-0.5 sm:gap-2">
-          {navItems.map((item) => {
-            const active =
-              workspaceMode === item.id && (item.id !== 'pipeline' || workbenchOpen);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelectWorkspaceMode(item.id)}
-                className={`relative rounded-lg px-2 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors sm:px-3 sm:text-[13px] ${
-                  active
-                    ? 'bg-[#EBF2EF] text-[#1D4438]'
-                    : 'text-[#5A564F] hover:bg-[#F5F3EF] hover:text-[#1C1B19]'
-                }`}
-              >
-                {item.label}
-              </button>
-            );
-          })}
+          <div className="mx-0.5 hidden h-5 w-px bg-[#E5E1DA] sm:block" />
+
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              disabled={!historySummary.canUndo}
+              onClick={() => viewportRef.current?.undo()}
+              title={
+                historySummary.undoLabel
+                  ? `Undo: ${historySummary.undoLabel} (Ctrl+Z)`
+                  : 'Undo (Ctrl+Z)'
+              }
+              aria-label="Undo last action"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-[#5A564F] transition-colors hover:border-[#E5E1DA] hover:bg-[#FAF9F6] hover:text-[#1C1B19] disabled:opacity-35"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={!historySummary.canRedo}
+              onClick={() => viewportRef.current?.redo()}
+              title={
+                historySummary.redoLabel
+                  ? `Redo: ${historySummary.redoLabel} (Ctrl+Y)`
+                  : 'Redo (Ctrl+Y)'
+              }
+              aria-label="Redo last action"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-transparent text-[#5A564F] transition-colors hover:border-[#E5E1DA] hover:bg-[#FAF9F6] hover:text-[#1C1B19] disabled:opacity-35"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Center: Workspace Modes (md+) + Play/Stop & Gravity Mode Cycle (always visible!) */}
+        <nav aria-label="Workspace modes" className="flex items-center gap-1 sm:gap-1.5">
+          <div className="hidden md:flex items-center gap-1">
+            {navItems.map((item) => {
+              const active =
+                workspaceMode === item.id && (item.id !== 'pipeline' || workbenchOpen);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleSelectWorkspaceMode(item.id)}
+                  className={`relative shrink-0 rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium whitespace-nowrap transition-colors ${
+                    active
+                      ? 'bg-[#EBF2EF] text-[#1D4438]'
+                      : 'text-[#5A564F] hover:bg-[#F5F3EF] hover:text-[#1C1B19]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+            <div className="mx-1 h-5 w-px shrink-0 bg-[#E5E1DA]" />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => viewportRef.current?.togglePlayMode()}
+            title={
+              playModeStatus.active
+                ? 'Stop Play Mode & Restore Scene (Esc)'
+                : 'Enter Temporary Play Mode (WASD / Touch Keys + Space)'
+            }
+            aria-label={playModeStatus.active ? 'Stop play mode' : 'Start play mode'}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium whitespace-nowrap transition-colors ${
+              playModeStatus.active
+                ? 'border-[#9E3134] bg-[#9E3134] text-white hover:bg-[#822528]'
+                : 'border-[#CFE2DA] bg-[#F2F8F5] text-[#1D4438] hover:border-[#2D5A4C] hover:bg-[#E4F0EB]'
+            }`}
+          >
+            {playModeStatus.active ? (
+              <Square className="h-3 w-3 fill-current" />
+            ) : (
+              <Play className="h-3 w-3 fill-current" />
+            )}
+            <span>{playModeStatus.active ? 'Stop' : 'Play'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCycleGravityMode}
+            title="Cycle Gravity: Normal (9.81 m/s²) → Low-G (3.5 m/s²) → Zero-G Sky Flight"
+            aria-label={`Gravity mode: ${gravityHeaderLabel}`}
+            className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1.5 text-[11.5px] font-medium whitespace-nowrap transition-colors ${
+              !physicsConfig.gravityEnabled
+                ? 'border-[#2D5A4C] bg-[#EBF2EF] text-[#1D4438]'
+                : physicsConfig.gravityStrength < 6
+                  ? 'border-[#C9DBD3] bg-[#F4F9F6] text-[#2D5A4C]'
+                  : 'border-[#E5E1DA] bg-[#FAF9F6] text-[#5A564F] hover:text-[#1C1B19]'
+            }`}
+          >
+            {!physicsConfig.gravityEnabled ? (
+              <Wind className="h-3.5 w-3.5 text-[#2D5A4C]" />
+            ) : physicsConfig.gravityStrength < 6 ? (
+              <Feather className="h-3.5 w-3.5 text-[#2D5A4C]" />
+            ) : (
+              <Magnet className="h-3.5 w-3.5 text-[#2D5A4C]" />
+            )}
+            <span className="hidden sm:inline">{gravityHeaderLabel}</span>
+          </button>
         </nav>
 
-        {/* Right: Converter utility + Primary Export CTA */}
-        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        {/* Right: Desktop Utility Actions + Export CTA + Mobile Overflow Menu */}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <button
+            type="button"
+            onClick={() => setManualOpen(true)}
+            aria-label="Open user manual"
+            className="hidden md:inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] px-2.5 py-1.5 text-[12px] font-medium whitespace-nowrap text-[#5A564F] transition-colors hover:bg-[#F0EDE6] hover:text-[#1C1B19]"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-[#2D5A4C]" />
+            <span className="hidden xl:inline">Manual</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCreatorOpen(true)}
+            aria-label="Open creator and about info"
+            className="hidden md:inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] px-2.5 py-1.5 text-[12px] font-medium whitespace-nowrap text-[#5A564F] transition-colors hover:bg-[#F0EDE6] hover:text-[#1C1B19]"
+          >
+            <User className="h-3.5 w-3.5 text-[#2D5A4C]" />
+            <span className="hidden xl:inline">Creator</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setConverterOpen(true)}
             aria-label="Open 3D file extension converter"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] px-2.5 py-1.5 text-[12px] font-medium text-[#5A564F] transition-colors hover:bg-[#F0EDE6] hover:text-[#1C1B19]"
+            className="hidden md:inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] px-2.5 py-1.5 text-[12px] font-medium whitespace-nowrap text-[#5A564F] transition-colors hover:bg-[#F0EDE6] hover:text-[#1C1B19]"
           >
             <ArrowRightLeft className="h-3.5 w-3.5 text-[#2D5A4C]" />
-            <span className="hidden md:inline">Convert</span>
+            <span className="hidden lg:inline">Convert</span>
           </button>
 
           <button
             type="button"
             onClick={() => setExportOpen(true)}
             aria-label="Export 3D asset"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#2D5A4C] px-2.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#22453A] sm:px-3.5 sm:text-[12.5px]"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#2D5A4C] px-2.5 py-1.5 text-[12px] font-medium whitespace-nowrap text-white transition-colors hover:bg-[#22453A] sm:px-3.5 sm:text-[12.5px]"
           >
             <Download className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Export</span>
           </button>
+
+          {/* Mobile Menu Trigger (< md) */}
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-label={mobileMenuOpen ? 'Close studio menu' : 'Open studio menu'}
+            aria-expanded={mobileMenuOpen}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E5E1DA] bg-[#FAF9F6] text-[#1C1B19] transition-colors hover:bg-[#F0EDE6] md:hidden"
+          >
+            {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
         </div>
+
+        {/* Mobile Overflow Navigation Drawer (< md) */}
+        {mobileMenuOpen && (
+          <div
+            role="menu"
+            aria-label="Mobile Studio Menu"
+            className="absolute top-full right-2.5 z-50 mt-1.5 w-64 max-w-[calc(100vw-20px)] space-y-2.5 rounded-2xl border border-[#E5E1DA] bg-white p-3 shadow-[0_14px_34px_rgba(28,27,25,0.16)] md:hidden"
+          >
+            <div>
+              <div className="mb-1.5 px-1 text-[10px] font-semibold tracking-[0.04em] text-[#847E75] uppercase">
+                Workspace
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {navItems.map((item) => {
+                  const active =
+                    workspaceMode === item.id && (item.id !== 'pipeline' || workbenchOpen);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        handleSelectWorkspaceMode(item.id);
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium transition-colors ${
+                        active
+                          ? 'bg-[#EBF2EF] text-[#1D4438]'
+                          : 'bg-[#FAF9F6] text-[#4F4B45] hover:bg-[#F0EDE6]'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1 border-t border-[#EFECE6] pt-2 text-[12px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setLibraryOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-[#1C1B19] hover:bg-[#F5F3EF]"
+              >
+                <Layers className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                Model Library
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setWorkbenchOpen(false);
+                  setInspectorOpen((p) => !p);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-[#1C1B19] hover:bg-[#F5F3EF]"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                {inspectorOpen ? 'Hide Inspector' : 'Open Inspector'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setConverterOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-[#1C1B19] hover:bg-[#F5F3EF]"
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                3D Format Converter
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setManualOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-[#1C1B19] hover:bg-[#F5F3EF]"
+              >
+                <BookOpen className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                User Manual
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setCreatorOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-[#1C1B19] hover:bg-[#F5F3EF]"
+              >
+                <User className="h-3.5 w-3.5 text-[#2D5A4C]" />
+                Creator & About
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* FULL-BLEED 3D STAGE */}
@@ -1629,7 +2070,11 @@ export function App() {
           quadView={quadView}
           onToggleQuadView={() => setQuadView((p) => !p)}
           showGrid={showGrid}
-          onToggleGrid={() => setShowGrid((p) => !p)}
+          onToggleGrid={() => handleToggleOverlay('showGrid')}
+          overlays={overlays}
+          onToggleOverlay={handleToggleOverlay}
+          cameraFov={cameraFov}
+          cameraSpeed={cameraSpeed}
           autoSpin={autoSpin}
           onToggleAutoSpin={() => setAutoSpin((p) => !p)}
           exploded={exploded}
@@ -1638,6 +2083,8 @@ export function App() {
           onLightingPresetChange={setLightingPreset}
           lightAngleDeg={lightAngleDeg}
           onLightAngleChange={setLightAngleDeg}
+          sunElevationDeg={sunElevationDeg}
+          shadowsEnabled={shadowsEnabled}
           wireframeOpacity={wireframeOpacity}
           onWireframeOpacityChange={setWireframeOpacity}
           insideOutSide={insideOutSide}
@@ -1650,8 +2097,18 @@ export function App() {
           gizmoSpace={gizmoSpace}
           snapGrid={snapGrid}
           snapRotateDeg={snapRotateDeg}
+          snapScale={snapScale}
           worldEnvPreset={worldEnvPreset}
           worldFogDensity={worldFogDensity}
+          worldFogHeight={worldFogHeight}
+          terrainBrush={terrainBrush}
+          scatterBrush={scatterBrush}
+          physicsConfig={physicsConfig}
+          onCycleGravityMode={handleCycleGravityMode}
+          activeToolMode={activeToolMode}
+          onToolModeChange={setActiveToolMode}
+          onHistoryChange={setHistorySummary}
+          onPlayModeChange={setPlayModeStatus}
           executionMode={executionMode}
           fsSupported={fsSupported}
           inspectorOpen={inspectorOpen || workbenchOpen}
@@ -1717,12 +2174,42 @@ export function App() {
           gizmoSpace={gizmoSpace}
           snapGrid={snapGrid}
           snapRotateDeg={snapRotateDeg}
+          snapScale={snapScale}
           worldEnvPreset={worldEnvPreset}
           worldFogDensity={worldFogDensity}
+          worldFogHeight={worldFogHeight}
+          sunElevationDeg={sunElevationDeg}
+          shadowsEnabled={shadowsEnabled}
+          cameraFov={cameraFov}
+          cameraSpeed={cameraSpeed}
+          activeToolMode={activeToolMode}
+          terrainBrush={terrainBrush}
+          scatterBrush={scatterBrush}
+          physicsConfig={physicsConfig}
+          playModeActive={playModeStatus.active}
           onGizmoModeChange={setGizmoMode}
           onGizmoSpaceChange={setGizmoSpace}
           onSnapGridChange={setSnapGrid}
           onSnapRotateChange={setSnapRotateDeg}
+          onSnapScaleChange={setSnapScale}
+          onSunElevationChange={setSunElevationDeg}
+          onToggleShadows={() => setShadowsEnabled((p) => !p)}
+          onWorldFogHeightChange={setWorldFogHeight}
+          onCameraFovChange={setCameraFov}
+          onCameraSpeedChange={setCameraSpeed}
+          onActiveToolModeChange={(mode) => {
+            setActiveToolMode(mode);
+            viewportRef.current?.setViewportToolMode(mode);
+          }}
+          onTerrainBrushChange={setTerrainBrush}
+          onScatterBrushChange={setScatterBrush}
+          onPhysicsConfigChange={setPhysicsConfig}
+          onResetPhysics={() => viewportRef.current?.resetPhysicsState()}
+          onTogglePlayMode={() => viewportRef.current?.togglePlayMode()}
+          onEditMaterial={(payload) => viewportRef.current?.editMaterial(payload)}
+          onSaveTexturesToRepo={handleSaveTexturesToRepo}
+          onGroupSelected={() => viewportRef.current?.groupSelectedNode()}
+          onUnparentNode={(uuid) => viewportRef.current?.unparentNode(uuid)}
           onAddPrimitive={(kind) => viewportRef.current?.addWorldPrimitive(kind)}
           onOpenLibraryToAppend={() => setLibraryOpen(true)}
           onDuplicateSelected={() => viewportRef.current?.duplicateSelected()}
@@ -1941,6 +2428,17 @@ export function App() {
           setTwoFactorOpen(false);
           notify('Unlocked Local Blender Bridge');
         }}
+      />
+
+      {/* USER MANUAL MODAL */}
+      <ManualModal open={manualOpen} onClose={() => setManualOpen(false)} />
+
+      {/* CREATOR / ABOUT MODAL */}
+      <CreatorModal
+        open={creatorOpen}
+        onClose={() => setCreatorOpen(false)}
+        repoOwner={serverConfig?.githubOwner}
+        repoName={serverConfig?.githubRepo}
       />
     </div>
   );
