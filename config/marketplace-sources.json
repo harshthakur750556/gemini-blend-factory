@@ -1,18 +1,28 @@
 {
-  "description": "Open-source 3D model websites scraped by the BlendFactory Studio Model Marketplace. Add your preferred public open-source 3D repositories here or via the Marketplace Sources drawer.",
+  "description": "Open-source 3D model websites scraped by the BlendFactory Studio Model Marketplace. Add any public 3D website URL (any TLD like .com, .org, .io, .net, .se, .co, etc.) here or from the Marketplace Sources drawer.",
   "defaultDownloadTarget": "repo",
   "defaultRenderViaGitHubCompute": true,
   "sources": [
     {
-      "id": "smutba",
-      "name": "Smutba",
-      "url": "https://smutba.se/",
+      "id": "open3dmodel",
+      "name": "Open3DModel",
+      "url": "https://open3dmodel.com/",
+      "adapter": "generic-html",
+      "enabled": true,
+      "maxModels": 120,
+      "license": "Free / Open 3D",
+      "description": "Open3DModel free 3D models catalog across Characters, Animals, Architecture, Furniture, Electronics, Nature, and Blender/OBJ formats."
+    },
+    {
+      "id": "https-open3dlab-com",
+      "name": "https://open3dlab.com/",
+      "url": "https://open3dlab.com/",
       "adapter": "auto",
-      "enabled": false,
+      "enabled": true,
       "maxModels": 60,
       "license": "Open Source",
-      "description": "User-configured open-source 3D model website (smutba.se).",
-      "addedAt": "2026-11-27T13:07:08.752Z"
+      "description": "User-configured open-source 3D model website (open3dlab.com).",
+      "addedAt": "2026-11-27T13:12:26.440Z"
     }
   ]
 }
