@@ -4,16 +4,6 @@
   "defaultRenderViaGitHubCompute": true,
   "sources": [
     {
-      "id": "open3dmodel",
-      "name": "Open3DModel",
-      "url": "https://open3dmodel.com/",
-      "adapter": "generic-html",
-      "enabled": true,
-      "maxModels": 120,
-      "license": "Free / Open 3D",
-      "description": "Open3DModel free 3D models catalog across Characters, Animals, Architecture, Furniture, Electronics, Nature, and Blender/OBJ formats."
-    },
-    {
       "id": "https-open3dlab-com",
       "name": "https://open3dlab.com/",
       "url": "https://open3dlab.com/",
