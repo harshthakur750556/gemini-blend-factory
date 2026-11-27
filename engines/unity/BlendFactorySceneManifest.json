@@ -1,0 +1,265 @@
+{
+  "engine": "Unity",
+  "renderPipeline": "URP / HDRP Compatible",
+  "projectName": "SkySanctuary_FantasyRPG",
+  "sceneName": "Michelle",
+  "character": "Aelira_Anime_Fantasy_Hero",
+  "physics": {
+    "gravity": 9.81,
+    "coyoteTime": 0.14
+  },
+  "actionNodesCount": 6,
+  "storyNodesCount": 5,
+  "graph": {
+    "projectName": "SkySanctuary_FantasyRPG",
+    "characterName": "Aelira_Anime_Fantasy_Hero",
+    "nodes": [
+      {
+        "id": "act-entry",
+        "track": "action",
+        "kind": "trigger",
+        "title": "On Play Start",
+        "subtitle": "Entry Event · Spawn Hero",
+        "x": 40,
+        "y": 120,
+        "triggerEvent": "OnPlayStart",
+        "unityStateName": "Entry_Spawn",
+        "unrealBlueprintNode": "Event BeginPlay",
+        "blenderActionTrack": "NLA_Spawn"
+      },
+      {
+        "id": "act-idle",
+        "track": "action",
+        "kind": "action",
+        "title": "Anime Relaxed Idle",
+        "subtitle": "Contraposto · Breeze Cloak",
+        "x": 300,
+        "y": 50,
+        "emote": "none",
+        "unityStateName": "Locomotion_Idle",
+        "unrealBlueprintNode": "BS_AnimeIdle",
+        "blenderActionTrack": "Action_Idle_Contraposto"
+      },
+      {
+        "id": "act-cond-speed",
+        "track": "action",
+        "kind": "condition",
+        "title": "Check Input / Speed",
+        "subtitle": "Speed > 4.5 or Key E",
+        "x": 300,
+        "y": 230,
+        "conditionExpr": "Speed > 4.5 || Input.Interact",
+        "unityStateName": "Cond_Locomotion",
+        "unrealBlueprintNode": "Branch (Velocity > 450)",
+        "blenderActionTrack": "Driver_Speed"
+      },
+      {
+        "id": "act-spell",
+        "track": "action",
+        "kind": "action",
+        "title": "Cast Emerald Rune",
+        "subtitle": "Arcane Circle + Cloak Lift",
+        "x": 580,
+        "y": 60,
+        "emote": "cast-spell",
+        "unityStateName": "Ability_CastRune",
+        "unrealBlueprintNode": "PlayMontage(AM_CastRune)",
+        "blenderActionTrack": "Action_CastRune"
+      },
+      {
+        "id": "act-flourish",
+        "track": "action",
+        "kind": "action",
+        "title": "Heroic Sword Flourish",
+        "subtitle": "Combat Ready Stance",
+        "x": 580,
+        "y": 230,
+        "emote": "sword-flourish",
+        "unityStateName": "Combat_Flourish",
+        "unrealBlueprintNode": "PlayMontage(AM_SwordFlourish)",
+        "blenderActionTrack": "Action_SwordFlourish"
+      },
+      {
+        "id": "act-wave",
+        "track": "action",
+        "kind": "action",
+        "title": "Greeting Wave",
+        "subtitle": "Friendly NPC Emote",
+        "x": 840,
+        "y": 145,
+        "emote": "wave",
+        "unityStateName": "Social_Wave",
+        "unrealBlueprintNode": "PlayMontage(AM_Wave)",
+        "blenderActionTrack": "Action_Wave"
+      },
+      {
+        "id": "story-intro",
+        "track": "story",
+        "kind": "dialogue",
+        "title": "Sanctuary Arrival",
+        "subtitle": "Chapter 1 · Opening Beat",
+        "x": 40,
+        "y": 120,
+        "speaker": "Aelira (Guild Mage)",
+        "dialogueText": "The ancient lantern spire is resonating again. Should we channel an emerald ward or survey the courtyard first?",
+        "emote": "heroic-stance",
+        "unityStateName": "Story_Ch1_Intro",
+        "unrealBlueprintNode": "DT_Dialogue::Ch1_Intro",
+        "blenderActionTrack": "Marker_Ch1_Intro"
+      },
+      {
+        "id": "story-choice",
+        "track": "story",
+        "kind": "choice",
+        "title": "Player Choice",
+        "subtitle": "Branching Narrative Fork",
+        "x": 310,
+        "y": 120,
+        "speaker": "Player Decision",
+        "choices": [
+          {
+            "id": "c-ward",
+            "label": "Channel Emerald Ward",
+            "targetNodeId": "story-ward"
+          },
+          {
+            "id": "c-scout",
+            "label": "Scout the Courtyard",
+            "targetNodeId": "story-scout"
+          }
+        ],
+        "unityStateName": "Story_Choice_01",
+        "unrealBlueprintNode": "BT_DialogueChoice",
+        "blenderActionTrack": "Marker_Choice_01"
+      },
+      {
+        "id": "story-ward",
+        "track": "story",
+        "kind": "world-event",
+        "title": "Awaken Celestial Sky",
+        "subtitle": "World Event + Rune Spell",
+        "x": 600,
+        "y": 45,
+        "speaker": "World System",
+        "dialogueText": "Aelira raises both hands as emerald runes unfurl beneath her boots, shifting the sanctuary into celestial twilight.",
+        "emote": "cast-spell",
+        "worldMood": "celestial",
+        "unityStateName": "Event_CelestialSky",
+        "unrealBlueprintNode": "Call SetSkyAtmosphere(Celestial)",
+        "blenderActionTrack": "World_Celestial_Mood"
+      },
+      {
+        "id": "story-scout",
+        "track": "story",
+        "kind": "dialogue",
+        "title": "Courtyard Recon",
+        "subtitle": "Meadow Breeze · Greeting",
+        "x": 600,
+        "y": 230,
+        "speaker": "Aelira (Guild Mage)",
+        "dialogueText": "Clear sightlines across the sunlit courtyard. I will mark the eastern ruins on our guild compass.",
+        "emote": "wave",
+        "worldMood": "meadow",
+        "unityStateName": "Story_CourtyardRecon",
+        "unrealBlueprintNode": "DT_Dialogue::Ch1_Recon",
+        "blenderActionTrack": "Marker_Recon"
+      },
+      {
+        "id": "story-quest",
+        "track": "story",
+        "kind": "quest",
+        "title": "Quest Updated",
+        "subtitle": "Objective Complete",
+        "x": 880,
+        "y": 135,
+        "questTitle": "Restore the Astral Lantern Spire",
+        "dialogueText": "Objective logged: Explore the 3D scene in Play Mode or import new Marketplace relics.",
+        "emote": "heroic-stance",
+        "unityStateName": "Quest_RestoreSpire",
+        "unrealBlueprintNode": "UpdateQuestObjective(RestoreSpire)",
+        "blenderActionTrack": "Marker_Quest_Updated"
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-a1",
+        "track": "action",
+        "fromNodeId": "act-entry",
+        "toNodeId": "act-idle",
+        "label": "Spawn"
+      },
+      {
+        "id": "e-a2",
+        "track": "action",
+        "fromNodeId": "act-entry",
+        "toNodeId": "act-cond-speed",
+        "label": "Tick"
+      },
+      {
+        "id": "e-a3",
+        "track": "action",
+        "fromNodeId": "act-idle",
+        "toNodeId": "act-spell",
+        "label": "Cast (Q)"
+      },
+      {
+        "id": "e-a4",
+        "track": "action",
+        "fromNodeId": "act-cond-speed",
+        "toNodeId": "act-flourish",
+        "label": "True"
+      },
+      {
+        "id": "e-a5",
+        "track": "action",
+        "fromNodeId": "act-spell",
+        "toNodeId": "act-wave",
+        "label": "Complete"
+      },
+      {
+        "id": "e-a6",
+        "track": "action",
+        "fromNodeId": "act-flourish",
+        "toNodeId": "act-wave",
+        "label": "Relax"
+      },
+      {
+        "id": "e-s1",
+        "track": "story",
+        "fromNodeId": "story-intro",
+        "toNodeId": "story-choice",
+        "label": "Continue"
+      },
+      {
+        "id": "e-s2",
+        "track": "story",
+        "fromNodeId": "story-choice",
+        "toNodeId": "story-ward",
+        "label": "Emerald Ward",
+        "choiceId": "c-ward"
+      },
+      {
+        "id": "e-s3",
+        "track": "story",
+        "fromNodeId": "story-choice",
+        "toNodeId": "story-scout",
+        "label": "Scout",
+        "choiceId": "c-scout"
+      },
+      {
+        "id": "e-s4",
+        "track": "story",
+        "fromNodeId": "story-ward",
+        "toNodeId": "story-quest",
+        "label": "Next"
+      },
+      {
+        "id": "e-s5",
+        "track": "story",
+        "fromNodeId": "story-scout",
+        "toNodeId": "story-quest",
+        "label": "Next"
+      }
+    ]
+  }
+}
